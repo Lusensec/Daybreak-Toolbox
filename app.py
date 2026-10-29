@@ -1871,9 +1871,22 @@ def baidu_fanyi():
             # 获取当前选择的翻译方向
             from_lang, to_lang = get_translation_direction()
 
-            translated_text = translate_text(input_text, from_lang=from_lang, to_lang=to_lang)
+            # P3-25: 阻塞的 HTTP 翻译请求移到 worker 线程，避免卡 UI；结果回主线程写入
             output_textbox.delete("1.0", END)
-            output_textbox.insert(END, translated_text)
+            output_textbox.insert(END, "正在翻译…")
+
+            def _show_result(t):
+                output_textbox.delete("1.0", END)
+                output_textbox.insert(END, t)
+
+            def _translate_worker():
+                try:
+                    translated_text = translate_text(input_text, from_lang=from_lang, to_lang=to_lang)
+                except Exception as e:
+                    translated_text = f"翻译出错：{e}"
+                output_textbox.after(0, lambda t=translated_text: _show_result(t))
+
+            threading.Thread(target=_translate_worker, daemon=True).start()
 
     # 创建翻译按钮
     translate_button = Button(fanyi_frame, text="翻译", command=on_translate_click)
