@@ -2191,11 +2191,10 @@ def rouji_panel():
                 get_rouji_json_xinxi()
                 polling_done = True  # 出现异常时也将标志设置为 True
 
-        poll_file_data()
-        # command_line.insert(END, "[finish] 文件接收结束" + "\n")
-
-        while not polling_done:
-            root.update()  # 更新 UI，使得 Tkinter 能够处理事件
+        # P1-2: 启动 100ms 一次的自主 after 轮询（poll_file_data 内部自续订）。
+        # 不再用 `while not polling_done: root.update()` 嵌套事件循环——那会递归处理所有
+        # pending 事件、阻塞调用方并引发重入；纯 after 驱动即可，UI 全程不卡。
+        root.after(100, poll_file_data)
 
 
         # while True:
