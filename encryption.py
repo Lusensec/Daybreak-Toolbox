@@ -133,7 +133,9 @@ def json_format(text):
             import ast
             return json.dumps(ast.literal_eval(text), indent=4, ensure_ascii=False)
         except:
-            return json.dumps(eval(text), indent=4, ensure_ascii=False)
+            # P2-7: 不再用 eval() 兜底（任意 Python 表达式都会触发 RCE）；
+            # 无法安全解析时给出提示，而不是执行用户输入
+            return f"无法解析为标准 JSON / Python 字面量。请确认输入是合法 JSON。\n（已拒绝执行任意表达式以保障安全）\n原文：{text[:80]}"
 
 
 def md5_encode(text):
