@@ -1565,7 +1565,7 @@ def create_ai_ask():
     ai_frame = Frame(root, bg="white", highlightbackground="black", highlightthickness=1, relief="solid")
     ai_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
     # 创建滚动文本框用于显示对话记录
-    chat_box = scrolledtext.ScrolledText(ai_frame, wrap="word", bg="#D9D9D9", fg="black", font=("SimSun", 12))
+    chat_box = scrolledtext.ScrolledText(ai_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["ui"])
     chat_box.grid(row=0, column=0, columnspan=2, sticky="nsew")
 
     # 禁止输入
@@ -1723,10 +1723,10 @@ def create_ai_ask_two():
     right_ai_frame.grid(row=0, column=1, columnspan=2, sticky="nsew", padx=5, pady=5)
 
     # 创建滚动文本框用于显示对话记录
-    left_chat_box = scrolledtext.ScrolledText(left_ai_frame, wrap="word", bg="#D9D9D9", fg="black", font=("SimSun", 12))
+    left_chat_box = scrolledtext.ScrolledText(left_ai_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["ui"])
     left_chat_box.grid(row=0, column=0, sticky="nsew")
 
-    right_chat_box = scrolledtext.ScrolledText(right_ai_frame, wrap="word", bg="#D9D9D9", fg="black", font=("SimSun", 12))
+    right_chat_box = scrolledtext.ScrolledText(right_ai_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["ui"])
     right_chat_box.grid(row=0, column=0, columnspan=2, sticky="nsew")
 
     # 禁止输入
@@ -1852,7 +1852,7 @@ def baidu_fanyi():
     direction_button.grid(row=0, column=1, sticky="e", padx=5, pady=5)
 
     # 创建文本输入框
-    input_textbox = Text(fanyi_frame, wrap="word", bg="gray90", fg="black", font=("Consolas", 11))
+    input_textbox = Text(fanyi_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["mono"])
     input_textbox.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
 
     # 创建输出文本提示
@@ -1860,7 +1860,7 @@ def baidu_fanyi():
     output_label.grid(row=2, column=0, sticky="w", padx=5, pady=5)
 
     # 创建输出文本框
-    output_textbox = Text(fanyi_frame, wrap="word", bg="white", fg="black", font=("Consolas", 11))
+    output_textbox = Text(fanyi_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["mono"])
     output_textbox.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
 
     def on_translate_click(event=None):
