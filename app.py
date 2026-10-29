@@ -49,12 +49,24 @@ root.update()
 canvas_width = int(root.winfo_width() * 0.9)
 canvas_height = int(root.winfo_height() * 0.9)
 # 创建画布，并使用 grid 布局管理器
-canvas = Canvas(root, width=canvas_width, height=canvas_height, bg="gray")
+canvas = Canvas(root, width=canvas_width, height=canvas_height, bg=ui_theme.COLORS["bg"])
 # 需要指定 row, column, padx, pady, sticky
 canvas.grid(row=0, column=0, padx=int(root.winfo_width() * 0.02), pady=int(root.winfo_height() * 0.08), sticky="nsew")
 # 配置主窗口，使画布居中
 root.columnconfigure(0, weight=1)  # 设置列的权重
-root.rowconfigure(0, weight=1)    # 设置行的权重
+root.rowconfigure(0, weight=1)    # 设置行的权重（主画布区）
+
+# 底部状态栏（持久，跨面板切换保持；用 set_status() 更新）
+status_bar = Frame(root, bg=ui_theme.COLORS["border"])
+status_bar.grid(row=1, column=0, sticky="we")
+status_label = Label(status_bar, text="就绪 · 破晓·工具箱", bg=ui_theme.COLORS["panel"],
+                     fg=ui_theme.COLORS["muted"], font=ui_theme.F["ui_small"], anchor="w", padx=10, pady=2)
+status_label.pack(side="left", fill="x", expand=True)
+root.rowconfigure(1, weight=0)
+
+def set_status(text, color=None):
+    """更新底部状态栏文字；color 可传 ui_theme.COLORS['success'/'warn'/'error']。"""
+    status_label.config(text=text, fg=color or ui_theme.COLORS["muted"])
 
 ### 三、画布上定义文本
 # 画布上定义文本
@@ -2010,7 +2022,10 @@ def rouji_panel():
             # 创建弹出菜单
             menu = Menu(root, tearoff=0)
             # menu.add_command(label="编辑", command=lambda: print("编辑"))
-            menu.add_command(label="删除", command=lambda: delete_server_C(rouji_ID))
+            def _confirm_delete(rid):
+                if messagebox.askokcancel("确认删除", f"确定要删除肉鸡 {rid}？\n将断开其 C2 会话并从列表中移除。", icon="warning"):
+                    delete_server_C(rid)
+            menu.add_command(label="删除", command=lambda: _confirm_delete(rouji_ID))
             menu.add_separator()
             menu.add_command(label="打开命令行", command=lambda: focus_command_line(rouji_ID))
             menu.add_separator()
