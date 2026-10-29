@@ -1,6 +1,6 @@
-# 综合成长型工具箱
+# 破晓·工具箱（Daybreak Toolbox）
 
-GitHub地址：[Lusensec/Comprehensive_Growth_Toolbox: 综合成长型工具箱 (github.com)](https://github.com/Lusensec/Comprehensive_Growth_Toolbox)
+GitHub地址：[Lusensec/Daybreak-Toolbox: 破晓·工具箱（Daybreak Toolbox）](https://github.com/Lusensec/Daybreak-Toolbox)
 
 更新方法：下载或者克隆项目后，直接覆盖原有项目即可。每次更新只会修改配置代码，不会对已有工具等配置项发生冲突
 
@@ -35,9 +35,20 @@ GitHub地址：[Lusensec/Comprehensive_Growth_Toolbox: 综合成长型工具箱 
 按钮工具有五种启动方式，常用1、2、3种：
 
 1. 绝对路径：适用于本机已经安装且无法移动的工具
-2. 相对路径：基于工具箱的相对路径，方便备份或者赠与他人
+
+2. 相对路径：基于工具分类的相对路径，方便备份或者赠与他人
+
+   ```
+   示例：
+   D:\Daybreak_Toolbox\win_RedTeam\御剑后台扫描工具\御剑后台扫描工具.exe
+   工具分类的指定路径是 win_RedTeam
+   则只需填写工具分类路径的后部分：御剑后台扫描工具\御剑后台扫描工具.exe
+   ```
+
 3. 文件夹路径：方便手动启动的工具，可以直接打开工具所处的文件夹，以便应对更加复杂的情况
+
 4. 链接打开：某些工具运行在docker 或者其他虚拟机等网页地址，我们可以将其地址写入，点击即可直接用浏览器打开该网页
+
 5. 下载链接：方便多数不常用的且占据内存的小工具，保存下载路径，随用随下载
 
 ### 1、直接打开
@@ -59,11 +70,11 @@ GitHub地址：[Lusensec/Comprehensive_Growth_Toolbox: 综合成长型工具箱 
 python * -h
 
 // 2、如命令行打开的exe
- *
+[空格]*
 // 3、如命令行打开的需要加参数的exe
 * -h
 // 4、需要双击打开的bat
- *
+[空格]*
 ```
 
 ### 3、剩下的打开方式
@@ -95,6 +106,16 @@ python * -h
 目前ChatAI模型只支持kimi ，需要在工具箱设置中配置好kimi 官网的api 才可以使用。在未来可能支持更多的对话模型
 
 ![image-20240929214330556](images/image-20240929214330556.png)
+
+2024/12/18 现已增加支持通义千问AI模型配置，同时增加AI分屏展示
+
+但由于AI配置项发生改变，需要手动删除 config/ai_ask.json 文件后重新配置模型API，需要安装通义千问支持的模块
+
+```
+pip3 install -r requirements.txt
+```
+
+![image-20241218212456979](images/image-20241218212456979.png)
 
 # 六、肉鸡面板（过杀软）
 
@@ -142,5 +163,5 @@ python3 server.py
 
 ```
 // 在使用前请先下载必要模块
-pip3 install -r requests.txt
+pip3 install -r requirements.txt
 ```

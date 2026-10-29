@@ -1,0 +1,7 @@
+openai
+requests
+chardet
+pycryptodome
+beautifulsoup4
+dashscope
+zhipuai

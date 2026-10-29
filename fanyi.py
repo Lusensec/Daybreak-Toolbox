@@ -11,6 +11,14 @@ def translate_text(text, from_lang='zh', to_lang='en'):
     sign = app_id + text + str(salt) + secret_key
     sign = hashlib.md5(sign.encode()).hexdigest()
 
+    # 判断是英文还是中文
+    if '\u4e00' <= text[0] <= '\u9fff':
+        from_lang = 'zh'
+        to_lang = 'en'
+    else:
+        from_lang = 'en'
+        to_lang = 'zh'
+
     params = {
         'q': text,
         'from': from_lang,
