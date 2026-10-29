@@ -33,18 +33,30 @@ def aes_encrypt(plaintext: bytes, key: bytes) -> str:
     result = base64.b64encode(iv + ciphertext).decode('utf-8')
     return result
 
+# 每个 socket 一把发送锁，保证多线程（A 端主循环 + 文件传输线程）并发调用 send_result
+# 时不会帧交错 / 部分发送
+_send_locks = {}
+_send_locks_guard = threading.Lock()
+
+def _get_send_lock(sock):
+    with _send_locks_guard:
+        lock = _send_locks.get(sock)
+        if lock is None:
+            lock = threading.Lock()
+            _send_locks[sock] = lock
+        return lock
+
 def send_result(client_socket, result_bytes):
     # 计算数据长度
     data_length = len(result_bytes)
-    # print(f"发送 -> {data_length} 字符")
 
-    # 打包长度（'!I' 表示网络字节序的无符号整数，4字节）
+    # 打包长度前缀（AES 加密后固定为 44 字节）
     length_prefix = aes_encrypt(str(data_length).encode('utf-8'), b'0123456789abcdef')
-    # 发送长度前缀
-    # print(f"发送 -> {length_prefix}")
-    client_socket.send(length_prefix.encode('utf-8'))
-    # 发送实际数据
-    client_socket.send(result_bytes)
+
+    # 单帧 sendall + 每 socket 一把锁：避免两次 send 被拆开、多线程并发导致帧交错
+    payload = result_bytes.encode('utf-8') if isinstance(result_bytes, str) else result_bytes
+    with _get_send_lock(client_socket):
+        client_socket.sendall(length_prefix.encode('utf-8') + payload)
 
 def aes_decrypt(encrypted_data: str, key: bytes) -> bytes:
     raw_data = base64.b64decode(encrypted_data)
