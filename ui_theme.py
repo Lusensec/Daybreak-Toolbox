@@ -3,6 +3,7 @@
 # 使用：import ui_theme；在创建各面板前调用 ui_theme.setup_ttk_style()。
 import tkinter.ttk as ttk
 import tkinter.font as tkfont
+import tkinter as tk
 
 # ---- 配色（浅色主题；深色值已备好，后续可扩展切换）----
 COLORS = {
@@ -85,3 +86,41 @@ def apply_console(text_widget):
     text_widget.tag_configure("cmd", foreground=COLORS["cmd_fg"])
     text_widget.tag_configure("title", foreground=COLORS["accent"], font=(F["ui"][0], F["ui"][1], "bold"))
     return text_widget
+
+
+def make_tooltip(widget, text, delay_ms=400):
+    """给任意控件加 hover 悬浮提示（轻量、无第三方依赖）。
+    用法：ui_theme.make_tooltip(button, "连接服务端并列出肉鸡")。"""
+    state = {"win": None, "after": None}
+
+    def _show():
+        state["after"] = None
+        if state["win"] is not None:
+            return
+        x = widget.winfo_rootx() + 22
+        y = widget.winfo_rooty() + 22
+        tipwin = tk.Toplevel(widget)
+        tipwin.wm_overrideredirect(True)
+        tipwin.wm_geometry(f"+{x}+{y}")
+        lb = tk.Label(tipwin, text=text, bg="#3c3f41", fg="white",
+                      font=F["ui_small"], padx=8, pady=4, anchor="w")
+        lb.pack()
+        state["win"] = tipwin
+
+    def _hide():
+        if state["after"] is not None:
+            try:
+                widget.after_cancel(state["after"])
+            except Exception:
+                pass
+            state["after"] = None
+        if state["win"] is not None:
+            state["win"].destroy()
+            state["win"] = None
+
+    def _on_enter(_event):
+        if state["win"] is None:
+            state["after"] = widget.after(delay_ms, _show)
+
+    widget.bind("<Enter>", _on_enter)
+    widget.bind("<Leave>", _hide)
