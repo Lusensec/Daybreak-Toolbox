@@ -204,10 +204,17 @@ def handle_file_transfer_nonblocking(rouji_id, client_a, remote_file, file_size)
         if not rouji_socket or rouji_socket.fileno() == -1:
             return False, "肉鸡socket无效"
         
-        # 提取文件名并确定保存路径
-        filename = os.path.basename(remote_file)
-        save_path = os.path.join("uploads", filename)
-        os.makedirs("uploads", exist_ok=True)
+        # 提取文件名并确定保存路径（P2-5：清洗文件名，确保始终落在 uploads/ 内，防路径穿越）
+        filename = os.path.basename(str(remote_file).replace("\\", "/"))
+        filename = filename.replace("\x00", "").strip()
+        if not filename or filename in (".", ".."):
+            filename = f"upload_{rouji_id}_{int(time.time())}"
+        save_dir = os.path.abspath("uploads")
+        save_path = os.path.abspath(os.path.join(save_dir, filename))
+        # 双重保险：最终路径必须仍在 uploads 目录内
+        if save_path != save_dir and not save_path.startswith(save_dir + os.sep):
+            return False, "非法的文件保存路径"
+        os.makedirs(save_dir, exist_ok=True)
 
         # 初始化传输状态
         transfer_states[rouji_id] = {
