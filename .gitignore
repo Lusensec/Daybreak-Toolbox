@@ -13,3 +13,4 @@ uploads/
 config/ai_ask.json
 config/accounts.json
 config/windowSize.json
+config/baidu.py
