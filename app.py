@@ -12,8 +12,7 @@ from tkinter import *
 from tkinter import colorchooser, scrolledtext, ttk
 from tkinter.ttk import Combobox
 
-# C2 帧协议：AES 加密后的长度前缀固定为 44 字节（base64(IV 16 + 1 个 AES 块 16)）
-C2_FRAME_HEADER_LEN = 44
+from c2_common import C2_AES_KEY, C2_FRAME_HEADER_LEN
 
 try:
     from fanyi import *
@@ -2067,7 +2066,7 @@ def rouji_panel():
             return buf
 
         header = _recv_exactly(C2_FRAME_HEADER_LEN)
-        length_bytes = aes_decrypt(header, b'0123456789abcdef')
+        length_bytes = aes_decrypt(header, C2_AES_KEY)
         data_length = int(length_bytes.decode('utf-8'))
         data_bytes = _recv_exactly(data_length) if data_length > 0 else b''
         return data_Byte_chardet(data_bytes)
