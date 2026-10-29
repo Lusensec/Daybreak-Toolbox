@@ -3,7 +3,6 @@ import time
 import chardet
 import socket
 import threading
-import queue
 import platform
 import getpass
 import select
@@ -1485,9 +1484,6 @@ def create_encode_decode():
 def create_ai_ask():
     global AI_ask_frame
 
-    # 创建一个线程安全的队列来存储响应数据
-    response_queue = queue.Queue()
-
     def on_send(entry, chat_box):
         # 从文本框中获取用户输入
         question = text_box.get("1.0", END)
@@ -1541,11 +1537,10 @@ def create_ai_ask():
             chat_box.configure(state='disabled')
             chat_box.yview(END)  # 自动滚动到文本框底部
 
-        # 定义一个函数来执行ai_main，并把响应放入队列
+        # 定义一个函数来执行ai_main，并把响应处理结果写回文本框
         def ai_request_thread(chat_box, question, ai_name):
             try:
                 response = ai_main(ai_name=ai_name, msg=question)
-                response_queue.put(response)  # 将响应放入队列
                 handle_response_with_markup(chat_box, response)  # 直接处理响应
             except Exception as e:
                 messagebox.showinfo("出错！","请检查 网络配置 和 API 配置是否正常！")
@@ -1689,13 +1684,10 @@ def create_ai_ask_two():
             chat_box.configure(state='disabled')
             chat_box.yview(END)  # 自动滚动到文本框底部
 
-        # 定义一个函数来执行ai_main，并把响应放入队列
+        # 定义一个函数来执行ai_main，并把响应处理结果写回文本框
         def ai_request_thread(chat_box, question, ai_name):
-            # 创建一个线程安全的队列来存储响应数据
-            response_queue = queue.Queue()
             try:
                 response = ai_main(ai_name=ai_name, msg=question)
-                response_queue.put(response)  # 将响应放入队列
                 handle_response_with_markup(chat_box, response)  # 直接处理响应
             except Exception as e:
                 messagebox.showinfo("出错！","请检查 网络配置 和 API 配置是否正常！")
