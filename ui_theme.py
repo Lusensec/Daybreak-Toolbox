@@ -128,6 +128,9 @@ def setup_ttk_style(palette=None):
     s.map("Treeview.Heading", background=[("active", p["heading_active"])])
     s.map("Treeview", background=[("selected", p["accent"])],
           foreground=[("selected", "white")])
+    s.configure("Horizontal.TProgressbar", background=p["accent"], troughcolor=p["border"],
+                bordercolor=p["panel"], lightcolor=p["accent"], darkcolor=p["accent"],
+                thickness=8)
     return s
 
 

