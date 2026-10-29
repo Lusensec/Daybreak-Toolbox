@@ -13,6 +13,7 @@ from tkinter import colorchooser, scrolledtext, ttk
 from tkinter.ttk import Combobox
 
 from c2_common import C2_AES_KEY, C2_FRAME_HEADER_LEN
+import ui_theme  # 统一 UI 主题（配色/字体/ttk 样式）
 
 # 串行化 A 端（工具↔server）同一 client socket 上的所有 C2 帧收发（肉鸡刷新 + C2 命令），
 # 避免多条 worker 线程并发 send/recv 导致帧交错失步
@@ -34,7 +35,7 @@ root = Tk()
 root.title(f"破晓·工具箱（Daybreak Toolbox） {next(iter(get_update_record_content().keys()))} - Daybreak网络安全协会")
 img = PhotoImage(file='images/daybreak_logo.png')  # 替换为你的图标文件路径
 root.iconphoto(True, img)  # True 表示设置为应用程序图标，适用于所有窗口
-root.config(bg="white")  # 背景设置
+root.config(bg=ui_theme.COLORS["bg"])  # 背景设置（统一主题）
 windowSize_json = get_windowSize_json()
 if check_json_null(windowSize_json):
     center_window(root, windowSize_json['windowSize_Width'], windowSize_json['windowSize_Higths'])  # 窗体的位置和长宽
@@ -2263,13 +2264,13 @@ def rouji_panel():
                     if on_error:
                         command_line.after(0, lambda e=e: on_error(e))
                     else:
-                        command_line.after(0, lambda e=e: command_line.insert(END, f"Error: {e}\n"))
+                        command_line.after(0, lambda e=e: command_line.insert(END, f"Error: {e}\n", "error"))
                     return
             # 写回 UI（主线程）
             if on_result:
                 command_line.after(0, lambda r=result: on_result(r))
             else:
-                command_line.after(0, lambda r=result: command_line.insert(END, r + "\n"))
+                command_line.after(0, lambda r=result: command_line.insert(END, r + "\n", "info"))
         threading.Thread(target=_worker, daemon=True).start()
 
     def change_directory(rouji_ID,command):
@@ -2299,7 +2300,8 @@ def rouji_panel():
 
     # 创建命令行控件
     # command_line = Text(nav_frame_two, height=10, bg="gray90", fg="black", font=("Microsoft YaHei", 10, "bold"))  # 使用Text控件作为命令行
-    command_line = Text(nav_frame_two, height=10, bg="gray90", fg="black", font=("Consolas", 11))  # 使用Text控件作为命令行，字体与临时笔记保持一致
+    command_line = Text(nav_frame_two, height=10)  # 使用Text控件作为命令行
+    ui_theme.apply_console(command_line)  # 深色控制台配色 + 预定义 info/success/error/cmd tag
     command_line.grid(row=0, column=0, columnspan=9,sticky=NSEW)  # 使用grid使其填
 
     # 绑定 enter 回车 事件
@@ -2407,6 +2409,9 @@ def update_position(event, text_id, frame):
 
 def main():
     global canvas, root, text_id, frame_id
+
+    # 应用统一 ttk 主题（须在创建各面板前，让 Treeview/Combobox/Scrollbar 等继承配色）
+    ui_theme.setup_ttk_style()
 
     # 在展示菜单栏前要先创建临时笔记
     create_note()
