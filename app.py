@@ -2046,28 +2046,28 @@ def rouji_panel():
 
     def recv_result(client_socket):
         """
-        接收数据：先读4字节长度，再读实际数据
+        接收数据：先读44字节长度前缀，再读实际数据。
+        循环累积防 TCP 拆包；对端关闭时抛异常，避免死循环。
         """
         print('---')
 
-        data = client_socket.recv(44)
+        def _recv_exactly(n):
+            buf = b''
+            while len(buf) < n:
+                chunk = client_socket.recv(n - len(buf))
+                if not chunk:
+                    raise ConnectionError("服务端连接已关闭")
+                buf += chunk
+            return buf
+
+        data = _recv_exactly(44)
         length_bytes = aes_decrypt(data, b'0123456789abcdef')
         # 2. 解包获取实际数据长度
         data_length = int(length_bytes.decode('utf-8'))
-        # 3. 根据长度读取实际数据
-        shiji_lens = 0
-        data_bytes= b''
-        while shiji_lens < data_length:
-            data_bytes += client_socket.recv(data_length)
-            shiji_lens = len(data_bytes)
+        # 3. 根据长度读取实际数据（data_length 为 0 时为空字节）
+        data_bytes = _recv_exactly(data_length) if data_length > 0 else b''
         print(f"接收 -> {data_length} 字节")
         print(f"实际接收 -> {len(data_bytes)} 字节")
-        print(f"接收 -> {data}")
-
-        # result = data_bytes.decode('utf-8')
-        # print(f"接收 -> {result}")
-
-        # print(f"result: {result}")
 
         data = data_Byte_chardet(data_bytes)
 
