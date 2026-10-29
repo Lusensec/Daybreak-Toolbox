@@ -68,6 +68,17 @@ def set_status(text, color=None):
     """更新底部状态栏文字；color 可传 ui_theme.COLORS['success'/'warn'/'error']。"""
     status_label.config(text=text, fg=color or ui_theme.COLORS["muted"])
 
+def _toggle_dark():
+    """切换 浅/深 主题：重套 ttk 样式 + 根/画布/状态栏 + 已注册经典控件。可逆、无副作用。"""
+    ui_theme.set_dark(not ui_theme.is_dark())
+    p = ui_theme.active_palette()
+    ui_theme.setup_ttk_style(p)
+    root.config(bg=p["bg"])
+    canvas.config(bg=p["bg"])
+    status_bar.config(bg=p["border"])
+    status_label.config(bg=p["panel"], fg=p["muted"])
+    ui_theme.restyle_classic()
+
 ### 三、画布上定义文本
 # 画布上定义文本
 text_id = canvas.create_text(canvas_width / 2, canvas_height * 0.05, text="破晓·工具箱首页", font=("Helvetica", 20), fill="lightgray", tags="my_text")
@@ -985,6 +996,11 @@ def show_menu():
     menu_tool_add.add_command(label="更新记录", command=update_record_show)
     menu_bar.add_cascade(label="工具箱设置", menu=menu_tool_add)
 
+    # 外观（主题切换）
+    menu_appearance = Menu(menu_bar, tearoff=0)
+    menu_appearance.add_command(label="深色模式（开/关）", command=_toggle_dark)
+    menu_bar.add_cascade(label="外观", menu=menu_appearance)
+
     # 3、动态的添加菜单栏
     if config_json_null_check():
         for menu_name in get_menu_name_all():
@@ -1578,6 +1594,7 @@ def create_ai_ask():
     ai_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
     # 创建滚动文本框用于显示对话记录
     chat_box = scrolledtext.ScrolledText(ai_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["ui"])
+    ui_theme.register(chat_box, "panel_text")
     chat_box.grid(row=0, column=0, columnspan=2, sticky="nsew")
 
     # 禁止输入
@@ -1737,9 +1754,11 @@ def create_ai_ask_two():
 
     # 创建滚动文本框用于显示对话记录
     left_chat_box = scrolledtext.ScrolledText(left_ai_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["ui"])
+    ui_theme.register(left_chat_box, "panel_text")
     left_chat_box.grid(row=0, column=0, sticky="nsew")
 
     right_chat_box = scrolledtext.ScrolledText(right_ai_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["ui"])
+    ui_theme.register(right_chat_box, "panel_text")
     right_chat_box.grid(row=0, column=0, columnspan=2, sticky="nsew")
 
     # 禁止输入
@@ -1867,6 +1886,7 @@ def baidu_fanyi():
 
     # 创建文本输入框
     input_textbox = Text(fanyi_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["mono"])
+    ui_theme.register(input_textbox, "panel_text")
     input_textbox.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
 
     # 创建输出文本提示
@@ -1875,6 +1895,7 @@ def baidu_fanyi():
 
     # 创建输出文本框
     output_textbox = Text(fanyi_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["mono"])
+    ui_theme.register(output_textbox, "panel_text")
     output_textbox.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
 
     def on_translate_click(event=None):
@@ -2319,7 +2340,8 @@ def rouji_panel():
     # 创建命令行控件
     # command_line = Text(nav_frame_two, height=10, bg="gray90", fg="black", font=("Microsoft YaHei", 10, "bold"))  # 使用Text控件作为命令行
     command_line = Text(nav_frame_two, height=10)  # 使用Text控件作为命令行
-    ui_theme.apply_console(command_line)  # 深色控制台配色 + 预定义 info/success/error/cmd tag
+    ui_theme.apply_console(command_line)  # 控制台配色 + 预定义 tag
+    ui_theme.register(command_line, "console")  # 随主题切换重套色
     command_line.grid(row=0, column=0, columnspan=9,sticky=NSEW)  # 使用grid使其填
 
     # 绑定 enter 回车 事件
