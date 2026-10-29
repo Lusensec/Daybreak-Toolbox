@@ -994,12 +994,9 @@ def show_menu():
     menu_tool_add.add_command(label="窗口大小", command=windowSize_Setting)
     menu_tool_add.add_separator()
     menu_tool_add.add_command(label="更新记录", command=update_record_show)
+    menu_tool_add.add_separator()
+    menu_tool_add.add_command(label="深色模式（开/关）", command=_toggle_dark)
     menu_bar.add_cascade(label="工具箱设置", menu=menu_tool_add)
-
-    # 外观（主题切换）
-    menu_appearance = Menu(menu_bar, tearoff=0)
-    menu_appearance.add_command(label="深色模式（开/关）", command=_toggle_dark)
-    menu_bar.add_cascade(label="外观", menu=menu_appearance)
 
     # 3、动态的添加菜单栏
     if config_json_null_check():
