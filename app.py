@@ -1196,7 +1196,8 @@ def create_note():
             line_numbers_canvas.delete("all")
             canvas_height = line_numbers_canvas.winfo_height()
             if canvas_height <= 1:
-                note_frame.after(100, update_line_numbers)
+                # 面板隐藏时不自我重排，避免整会话持续 100ms 空转；
+                # 面板重新显示时会触发 <Configure> → on_canvas_resize 重排行号
                 return
 
             first_visible = text_area.index("@0,0")
@@ -1946,20 +1947,28 @@ def rouji_panel():
                 connect_time = rouji_xinxi[rouji_id].get("rouji_time", "未知")
                 tree.insert('', 'end', values=(rouji_id, rouji_xinxi[rouji_id]["rouji_ip"], rouji_xinxi[rouji_id]["rouji_port"], user, process, connect_time))
 
+    # 单一自动刷新定时器 id，避免多个触发点（手动刷新 / 下载完成 / 连接成功）各自
+    # root.after(5000, ...) 叠加出多条 5s 刷新链，导致服务端流量翻倍
+    auto_refresh_id = [None]
+
     def get_rouji_json_xinxi():
         global rouji_xinxi, rouji_json_xinxi_get
 
         if config_server_json_null_check():
             if not rouji_json_xinxi_get:
                 return
+            # 取消已挂起的自动刷新，保证同一时刻只有一条 5s 刷新链
+            if auto_refresh_id[0] is not None:
+                root.after_cancel(auto_refresh_id[0])
+                auto_refresh_id[0] = None
             # 发送命令和接收命令
             client.send("rouji_json_xinxi".encode("UTF-8"))
             # rouji_xinxi = json.loads(client.recv(4096).decode("UTF-8"))
             rouji_xinxi = json.loads(recv_result(client))
             # 更新展示
             update_rouji_xinxi(rouji_xinxi)
-            # 之后每5s 自动进行更新操作
-            root.after(5000, get_rouji_json_xinxi)
+            # 之后每5s 自动进行更新操作（复用同一个定时器 id）
+            auto_refresh_id[0] = root.after(5000, get_rouji_json_xinxi)
         else:
             messagebox.showinfo("错误","请先进行服务端的连接！\n请将工具箱目录下的server.py文件运行在放在双方都可访问的服务器上\n并配置服务端连接")
 
