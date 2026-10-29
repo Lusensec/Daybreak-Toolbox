@@ -1541,9 +1541,11 @@ def create_ai_ask():
         def ai_request_thread(chat_box, question, ai_name):
             try:
                 response = ai_main(ai_name=ai_name, msg=question)
-                handle_response_with_markup(chat_box, response)  # 直接处理响应
+                # P1-1: worker 线程内直接改 tkinter 有跨线程风险，改回主线程执行
+                chat_box.after(0, lambda: handle_response_with_markup(chat_box, response))
             except Exception as e:
-                messagebox.showinfo("出错！","请检查 网络配置 和 API 配置是否正常！")
+                # P1-1: 弹窗也回主线程执行（worker 线程内直接 messagebox 不安全）
+                chat_box.after(0, lambda: messagebox.showinfo("出错！","请检查 网络配置 和 API 配置是否正常！"))
 
         # 创建并启动线程
         ai_name = get_ai_json_use_True_name()   # 获取use_page 为1的AI名称
@@ -1688,9 +1690,11 @@ def create_ai_ask_two():
         def ai_request_thread(chat_box, question, ai_name):
             try:
                 response = ai_main(ai_name=ai_name, msg=question)
-                handle_response_with_markup(chat_box, response)  # 直接处理响应
+                # P1-1: worker 线程内直接改 tkinter 有跨线程风险，改回主线程执行
+                chat_box.after(0, lambda: handle_response_with_markup(chat_box, response))
             except Exception as e:
-                messagebox.showinfo("出错！","请检查 网络配置 和 API 配置是否正常！")
+                # P1-1: 弹窗也回主线程执行（worker 线程内直接 messagebox 不安全）
+                chat_box.after(0, lambda: messagebox.showinfo("出错！","请检查 网络配置 和 API 配置是否正常！"))
 
         # 创建并启动线程
         # ai_name = get_ai_json_use_True_name()   # 获取use_page 为2的AI名称
