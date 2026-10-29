@@ -639,8 +639,7 @@ def get_json_txt_all(menu_path):
                     tool = json.loads(line.strip()) # 一行一行进行解析
                     tools.append(tool)
                 except json.JSONDecodeError as e:
-                    print(f"解析JSON失败：{e}")
-                    return []
+                    print(f"解析JSON失败，跳过该行：{e}")
     except FileNotFoundError as e:
         print(f"[!] 警告！{menu_path}/tools.txt 工具配置信息文件出错")
     return tools
@@ -669,32 +668,32 @@ def get_tool_uses(tool_categorie,tool_use):
 
 # 4、根据工具类型获取对应目录下tools.txt 文件的所有内容
 def get_tools(tool_categorie):  # 根据 工具的分类（菜单栏名称） 获取tools.txt 下所有的工具
-    tools = []
     txt_path = get_menu_path_one(tool_categorie)
-    try:
-        with open(txt_path + '/tools.txt', 'r', encoding='utf-8') as file:
-            for line in file:
-                try:
-                    tool = json.loads(line.strip()) # 一行一行进行解析
-                    tools.append(tool)
-                except json.JSONDecodeError as e:
-                    print(f"解析 JSON 时发生错误：{e}")
-    except FileNotFoundError:
-        print(f"[!] 警告！{txt_path}/tools.txt 工具配置信息文件出错")
-    return tools
+    # 统一走 get_json_txt_all 解析，保持"读取"与"编辑/删除/移动写回"共用同一份解析逻辑，
+    # 避免两个解析器行为不一致
+    return get_json_txt_all(txt_path)
 
 # 5、更新update_json_text_all: 全写入全更新操作：菜单栏和全写入的json_txt 内容
 def update_tools(tool_categorie,tool_info):
     # 1、获取这个tools文件的路径
     txt_path = get_menu_path_one(tool_categorie)
+    file_path = txt_path + "/tools.txt"
 
-    # 2、清空这个tools文件
-    with open(txt_path + "/tools.txt", 'w') as file:
-        pass  # 不需要执行任何操作，直接关闭文件
-
-    # 3、进行tools文件的追加
-    for tool in tool_info:
-        save_tool_txt(txt_path,tool)
+    # 2、原子化写入：先把全部内容一次性落到同目录的临时文件，
+    #    成功后用 os.replace 原子替换，避免中途崩溃/异常留下被截断的空 tools.txt。
+    tmp_path = file_path + ".tmp"
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as file:
+            for tool in tool_info:
+                json.dump(tool, file, ensure_ascii=False)
+                file.write('\n')  # 换行分隔每个工具的信息
+        os.replace(tmp_path, file_path)  # 原子替换
+    except Exception as e:
+        # 写失败时清理临时文件并尽量保留原文件，再向上抛出
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        print(f"[!] 警告！写入 {file_path} 失败：{e}")
+        raise
 
 ### 七、AI对话模型设置
 # 1、获取 ai_json 文件中的所有内容
