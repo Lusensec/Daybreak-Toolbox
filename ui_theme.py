@@ -66,7 +66,8 @@ def active_palette():
     return DARK if _dark["on"] else COLORS
 
 def register(widget, kind):
-    """注册一个需随主题切换重套色的经典 tk 控件；kind: 'console' | 'panel_text'。"""
+    """注册一个需随主题切换重套色的经典 tk 控件；
+    kind: 'console' | 'panel_text' | 'navbar' | 'nav_button' | 'menu_bar' | 'menu_button'。"""
     _registry.append((widget, kind))
 
 def restyle_classic():
@@ -78,6 +79,18 @@ def restyle_classic():
                 apply_console(w, p)
             elif kind == "panel_text":
                 w.config(bg=p["panel"], fg=p["text"])
+            elif kind == "navbar":
+                w.config(bg=p["heading_bg"])
+            elif kind == "nav_button":
+                w.config(bg=p["heading_bg"], fg=p["text"],
+                         activebackground=p["heading_active"], activeforeground=p["accent"])
+            elif kind == "menu_bar":
+                w.config(bg=p["bg"])
+            elif kind == "menu_button":
+                # 当前选中菜单项保持 accent 高亮，其余回落正文色
+                fg = p["accent"] if getattr(w, "menu_active", False) else p["text"]
+                w.config(bg=p["bg"], fg=fg,
+                         activebackground=p["heading_active"], activeforeground=p["accent"])
         except Exception:
             pass
 

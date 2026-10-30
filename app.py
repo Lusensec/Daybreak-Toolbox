@@ -19,6 +19,9 @@ import ui_theme  # 统一 UI 主题（配色/字体/ttk 样式）
 # 避免多条 worker 线程并发 send/recv 导致帧交错失步
 CLIENT_SOCKET_LOCK = threading.Lock()
 
+# 自绘菜单栏高度（show_menu 构建后回填；导航栏 place 的 y 偏移量）
+MENU_BAR_HEIGHT = 0
+
 try:
     from fanyi import *
 except Exception:
@@ -51,18 +54,19 @@ canvas_height = int(root.winfo_height() * 0.9)
 # 创建画布，并使用 grid 布局管理器
 canvas = Canvas(root, width=canvas_width, height=canvas_height, bg=ui_theme.COLORS["bg"])
 # 需要指定 row, column, padx, pady, sticky
-canvas.grid(row=0, column=0, padx=int(root.winfo_width() * 0.02), pady=int(root.winfo_height() * 0.08), sticky="nsew")
-# 配置主窗口，使画布居中
+canvas.grid(row=1, column=0, padx=int(root.winfo_width() * 0.02), pady=int(root.winfo_height() * 0.08), sticky="nsew")
+# 配置主窗口，使画布居中（row0=自绘菜单栏 row1=画布 row2=状态栏）
 root.columnconfigure(0, weight=1)  # 设置列的权重
-root.rowconfigure(0, weight=1)    # 设置行的权重（主画布区）
+root.rowconfigure(0, weight=0)    # 菜单栏行（自绘，固定高）
+root.rowconfigure(1, weight=1)    # 画布行
+root.rowconfigure(2, weight=0)    # 状态栏行（自绘，固定高）
 
 # 底部状态栏（持久，跨面板切换保持；用 set_status() 更新）
 status_bar = Frame(root, bg=ui_theme.COLORS["border"])
-status_bar.grid(row=1, column=0, sticky="we")
+status_bar.grid(row=2, column=0, sticky="we")
 status_label = Label(status_bar, text="就绪 · 破晓·工具箱", bg=ui_theme.COLORS["panel"],
                      fg=ui_theme.COLORS["muted"], font=ui_theme.F["ui_small"], anchor="w", padx=10, pady=2)
 status_label.pack(side="left", fill="x", expand=True)
-root.rowconfigure(1, weight=0)
 
 def set_status(text, color=None):
     """更新底部状态栏文字；color 可传 ui_theme.COLORS['success'/'warn'/'error']。"""
@@ -669,8 +673,8 @@ def reload_canvas(menu_name):    # 更新画布
         # 将 Frame 放置在 Canvas 上，居中并有一点垂直偏移
         frame_id = canvas.create_window(canvas_width / 2 + 5, canvas_height * 0.1 + 5, window=new_frame, anchor='n')
 
-        # 3、进行不同的导航栏创建和首页显示
-        create_Navigation_Bar(root,new_frame,get_navigation_bar_one(menu_name),menu_name)   # 创建导航栏
+        # 3、进行不同的导航栏创建和首页显示（top_offset=自绘菜单栏高度，避免与菜单栏重叠）
+        create_Navigation_Bar(root,new_frame,get_navigation_bar_one(menu_name),menu_name,MENU_BAR_HEIGHT)   # 创建导航栏
         load_tools_and_create_buttons(new_frame,menu_name)     # 展示首页
 
         # 4、更新 get_canvas 列表中的当前 Frame
@@ -979,13 +983,43 @@ def update_record_show():
 
     canvas.bind_all("<MouseWheel>", on_mousewheel)
 
-# 展示菜单栏
+# 展示菜单栏（自绘 Button 菜单栏：浅/深主题自适应；替代无法染色的 Windows 原生 tk.Menu 栏）
 def show_menu():
-    # 1、新建菜单栏控件
-    menu_bar = Menu(root)
+    global MENU_BAR_HEIGHT
+    p = ui_theme.active_palette()
 
-    # 2、添加菜单栏控件：添加控件
-    menu_tool_add = Menu(menu_bar, tearoff=0)
+    # 1、自绘菜单栏容器（grid row0；画布 row1；状态栏 row2）
+    menu_bar_frame = Frame(root, bg=p["bg"], highlightbackground=p["border"],
+                           highlightthickness=(0, 0, 1, 0))
+    menu_bar_frame.grid(row=0, column=0, sticky="we")
+    ui_theme.register(menu_bar_frame, "menu_bar")
+
+    item_btns = {}   # 菜单名 -> 按钮（用于高亮当前激活项）
+
+    def _mk_button(label, command=None, drop_menu=None):
+        b = Button(menu_bar_frame, text=label, relief="flat", bd=0,
+                   bg=p["bg"], fg=p["text"],
+                   activebackground=p["heading_active"], activeforeground=p["accent"],
+                   font=ui_theme.F["ui"], anchor="w", padx=10, pady=4,
+                   command=command)
+        if drop_menu is not None:
+            b.config(menu=drop_menu)  # 点击展开原生下拉（下拉弹层仍是系统样式）
+        b.pack(side="left")
+        ui_theme.register(b, "menu_button")
+        return b
+
+    def _select_menu(name, btn):
+        def _run():
+            for nm, w in item_btns.items():
+                w.menu_active = (nm == name)
+                q = ui_theme.active_palette()
+                w.config(fg=q["accent"] if w.menu_active else q["text"],
+                         font=ui_theme.F["ui_bold"] if w.menu_active else ui_theme.F["ui"])
+            reload_canvas(name)
+        return _run
+
+    # 2、工具箱设置（下拉保持原生 Menu）
+    menu_tool_add = Menu(root, tearoff=0)
     menu_tool_add.add_command(label="添加菜单栏", command=add_menus)
     menu_tool_add.add_command(label="添加导航栏", command=add_navigation_bar)
     menu_tool_add.add_command(label="添加工具", command=add_Tools)
@@ -996,27 +1030,25 @@ def show_menu():
     menu_tool_add.add_command(label="更新记录", command=update_record_show)
     menu_tool_add.add_separator()
     menu_tool_add.add_command(label="深色模式（开/关）", command=_toggle_dark)
-    menu_bar.add_cascade(label="工具箱设置", menu=menu_tool_add)
+    b0 = _mk_button("工具箱设置", drop_menu=menu_tool_add)
 
     # 3、动态的添加菜单栏
     if config_json_null_check():
         for menu_name in get_menu_name_all():
-            menu_bar.add_cascade(label=menu_name, command=lambda menu_name=menu_name: reload_canvas(menu_name))
+            b = _mk_button(menu_name, command=_select_menu(menu_name, None))
+            item_btns[menu_name] = b
 
     # 4、加载已定义的控件
-    # kimi_ai
-    menu_bar.add_cascade(label="AI对话模型", command=lambda menu_name="ai_ask": reload_canvas(menu_name))
-    # 百度翻译
-    menu_bar.add_cascade(label="汉英翻译", command=lambda menu_name="baidu_fanyi": reload_canvas(menu_name))
-    # 添加本地终端（编解码）
-    # menu_bar.add_cascade(label="本地终端", command=lambda menu_name="local_cmd": reload_canvas(menu_name))
-    menu_bar.add_cascade(label="编解码", command=lambda menu_name="encode_decode": reload_canvas(menu_name))
-    # 肉鸡面板
-    menu_bar.add_cascade(label="肉鸡面板", command=lambda menu_name="rouji_panel": reload_canvas(menu_name))
-    # 临时笔记
-    menu_bar.add_cascade(label="临时笔记", command=lambda menu_name="note_nemu": reload_canvas(menu_name))
+    for label, name in [("AI对话模型", "ai_ask"), ("汉英翻译", "baidu_fanyi"),
+                        ("编解码", "encode_decode"), ("肉鸡面板", "rouji_panel"),
+                        ("临时笔记", "note_nemu")]:
+        b = _mk_button(label, command=_select_menu(label, None))
+        item_btns[label] = b
 
-    root.config(menu=menu_bar)   # 配置到菜单栏到root上
+    # 回填菜单栏高度（供导航栏 place 的 y 偏移）
+    menu_bar_frame.update_idletasks()
+    MENU_BAR_HEIGHT = menu_bar_frame.winfo_reqheight()
+
 
 # 创建本地终端面板
 def create_local_cmd():

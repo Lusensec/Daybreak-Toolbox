@@ -9,6 +9,7 @@ import urllib
 from tkinter import Button, Frame, LEFT, Menu, messagebox, simpledialog, filedialog, Toplevel, Label
 from urllib.parse import urlparse
 from encryption import *
+import ui_theme  # A 端 UI 主题（导航栏按钮等共享控件随主题切换；C 端模板段不使用本模块）
 
 ### 一、创建全局变量
 # 1、保存按钮信息
@@ -459,15 +460,22 @@ def show_tools_properties(tool):
 
 ### 四、有关导航栏的操作
 # 1、创建导航栏
-def create_Navigation_Bar(win,canvas,navigation_bar_names,menu_name):    # 这里的canvas实质是按钮的frame，为了按钮能够显示出来
-    navigation_bar = Frame(win, bg="lightgrey")  # 导航栏背景颜色
-    navigation_bar.place(x=0, y=0, relwidth=1)  # 放置在菜单栏下方
+def create_Navigation_Bar(win,canvas,navigation_bar_names,menu_name,top_offset=0):    # 这里的canvas实质是按钮的frame，为了按钮能够显示出来
+    p = ui_theme.active_palette()   # 随 浅/深 主题切换
+    navigation_bar = Frame(win, bg=p["heading_bg"])  # 导航栏背景颜色
+    navigation_bar.place(x=0, y=top_offset, relwidth=1)  # 放置在菜单栏下方（top_offset 为自绘菜单栏高度）
+    ui_theme.register(navigation_bar, "navbar")
 
     # 在导航栏中添加按钮
     for navigation_bar_name in navigation_bar_names:
         # 动态创建按钮并添加到导航栏
-        button = Button(navigation_bar, text=navigation_bar_name, command=lambda tool_use=navigation_bar_name: load_tools_and_create_buttons(canvas, menu_name, tool_use=tool_use))
+        button = Button(navigation_bar, text=navigation_bar_name, command=lambda tool_use=navigation_bar_name: load_tools_and_create_buttons(canvas, menu_name, tool_use=tool_use),
+                       bg=p["heading_bg"], fg=p["text"], activebackground=p["heading_active"],
+                       activeforeground=p["accent"], relief="flat", bd=0,
+                       font=ui_theme.F["ui"], anchor="w", padx=10, pady=3,
+                       cursor="hand2")
         button.pack(side=LEFT, padx=0.05, pady=2)  # 使用 pack 布局管理器
+        ui_theme.register(button, "nav_button")
         show_context_menu(button,menu_name,navigation_bar_name)
 
 # 2、导航栏左侧移动
