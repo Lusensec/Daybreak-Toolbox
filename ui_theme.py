@@ -18,17 +18,29 @@ COLORS = {
     "success":    "#188038",
     "warn":       "#f9ab00",
     "error":      "#d93025",
-    # 命令行（深色控制台）
-    "console_bg": "#1e1e28",
-    "console_fg": "#d4d4d4",
-    "cmd_fg":     "#4fc3f7",  # 用户命令
-    "out_fg":     "#d4d4d4",  # 普通输出
+    # 命令行（浅色主题用浅色控制台；深色主题在 DARK 里用深色）
+    "console_bg": "#ffffff",
+    "console_fg": "#202124",
+    "cmd_fg":     "#1a73e8",
+    "out_fg":     "#202124",
 }
 
 # 给浅色 COLORS 补上 setup_ttk_style 需要的 3 个键，保持与 DARK 结构一致
 COLORS["scroll"] = "#cfd8dc"
 COLORS["heading_bg"] = "#e8eaed"
 COLORS["heading_active"] = "#dde2e8"
+# 经典控件（笔记编辑器 / 输入框 / 分屏子框 / 行号槽）浅色调色板
+COLORS["note_bg"] = "#f4f6f8"
+COLORS["note_fg"] = "#202124"
+COLORS["note_gutter_bg"] = "#e8eaed"
+COLORS["note_gutter_fg"] = "#9aa0a6"
+COLORS["note_line_hl"] = "#d1e7ff"
+COLORS["note_cursor"] = "#1a73e8"
+COLORS["note_sel"] = "#a8d1ff"
+COLORS["note_sel_fg"] = "#000000"
+COLORS["tint_blue"] = "#e8f0fe"
+COLORS["tint_green"] = "#e6f4ea"
+COLORS["entry_bg"] = "#ffffff"
 
 # ---- 深色调色板（结构同 COLORS；切换用）----
 DARK = {
@@ -50,6 +62,18 @@ DARK = {
     "scroll":     "#44474f",
     "heading_bg": "#31343d",
     "heading_active": "#3a3d46",
+    # 经典控件（笔记编辑器 / 输入框 / 分屏子框 / 行号槽）深色调色板
+    "note_bg": "#1e1f24",
+    "note_fg": "#e6e6e6",
+    "note_gutter_bg": "#262830",
+    "note_gutter_fg": "#9aa0a6",
+    "note_line_hl": "#2a3a52",
+    "note_cursor": "#4f9cf9",
+    "note_sel": "#2a4a75",
+    "note_sel_fg": "#ffffff",
+    "tint_blue": "#263447",
+    "tint_green": "#24382e",
+    "entry_bg": "#1e1f24",
 }
 
 # ---- 主题状态（浅/深切换）与"经典控件"注册表 ----
@@ -77,6 +101,17 @@ def restyle_classic():
         try:
             if kind == "console":
                 apply_console(w, p)
+            elif kind == "console_light":
+                # 命令行区跟随面板配色（浅=白、深=深），不用恒暗的 console_bg
+                w.config(bg=p["panel"], fg=p["text"],
+                         insertbackground=p["text"],
+                         selectbackground=p["accent"], selectforeground="white")
+                w.tag_configure("info", foreground=p["text"])
+                w.tag_configure("success", foreground=p["success"])
+                w.tag_configure("warn", foreground=p["warn"])
+                w.tag_configure("error", foreground=p["error"])
+                w.tag_configure("cmd", foreground=p["accent"])
+                w.tag_configure("orange", foreground=p["accent"])
             elif kind == "panel_text":
                 w.config(bg=p["panel"], fg=p["text"])
             elif kind == "navbar":
@@ -91,6 +126,36 @@ def restyle_classic():
                 fg = p["accent"] if getattr(w, "menu_active", False) else p["text"]
                 w.config(bg=p["bg"], fg=fg,
                          activebackground=p["heading_active"], activeforeground=p["accent"])
+            elif kind == "menu_sep":
+                w.config(bg=p["border"])
+            elif kind == "panel_frame":
+                w.config(bg=p["panel"], highlightbackground=p["border"])
+            elif kind == "entry":
+                w.config(bg=p["entry_bg"], fg=p["text"])
+            elif kind == "classic_text":
+                w.config(bg=p["panel"], fg=p["text"])
+            elif kind == "classic_scroll":
+                w.config(bg=p["scroll"], troughcolor=p["panel"])
+            elif kind == "note_gutter":
+                w.config(bg=p["note_gutter_bg"])
+            elif kind == "note":
+                w.config(bg=p["note_bg"], fg=p["note_fg"],
+                         insertbackground=p["note_cursor"],
+                         selectbackground=p["note_sel"],
+                         selectforeground=p["note_sel_fg"])
+            elif kind == "tint":
+                # 注册时给 widget 设置 tint_key 属性（"tint_blue" / "tint_green"）
+                w.config(bg=p.get(getattr(w, "tint_key", "tint_blue"), p["panel"]))
+            elif kind in ("fanyi_button", "rouji_button"):
+                w.config(bg=p["heading_bg"], fg=p["text"],
+                         activebackground=p["heading_active"], activeforeground=p["accent"])
+            elif kind == "panel_button":
+                w.config(bg=p["accent"], fg="white",
+                         activebackground=p["accent_hi"], activeforeground="white")
+            elif kind in ("fanyi_label", "rouji_label"):
+                w.config(bg=p["panel"], fg=p["text"])
+            elif kind in ("rouji_input",):
+                w.config(bg=p["entry_bg"], fg=p["text"])
         except Exception:
             pass
 

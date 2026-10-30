@@ -542,8 +542,11 @@ def reload_canvas(menu_name):    # 更新画布
         # 6、隐藏肉鸡面板
         rouji_command_panel.grid_forget()
 
-        # 8、显示笔记
-        note_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        # 隐藏 canvas（工具按钮区与固定面板互斥，同在 row=1）
+        canvas.grid_forget()
+
+        # 7、显示笔记
+        note_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
     elif menu_name == "ai_ask":
         # 1、遍历 root 内的所有place子组件进行隐藏
         for widget in root.winfo_children():
@@ -568,7 +571,8 @@ def reload_canvas(menu_name):    # 更新画布
         # 8、判断api是否配置好
         if config_ai_json_null_check(): # 配置好了进行ai展示
             # 显示ai对话模型
-            AI_ask_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+            canvas.grid_forget()
+            AI_ask_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
         else:   # 没配置好，不能展示
             messagebox.showinfo("警告！","请先在工具箱配置中配置好AI的API！")
     # elif menu_name == "local_cmd":
@@ -613,7 +617,8 @@ def reload_canvas(menu_name):    # 更新画布
         rouji_command_panel.grid_forget()
 
         # 8、展示百度翻译
-        baidu_fanyi_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        canvas.grid_forget()
+        baidu_fanyi_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
     elif menu_name == "encode_decode":
         # 隐藏其他组件
         for widget in root.winfo_children():
@@ -632,7 +637,8 @@ def reload_canvas(menu_name):    # 更新画布
         rouji_command_panel.grid_forget()
 
         # 7、显示编解码面板
-        encode_decode_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        canvas.grid_forget()
+        encode_decode_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
     elif menu_name == "rouji_panel":
         # 1、遍历 root 内的所有place子组件进行隐藏
         for widget in root.winfo_children():
@@ -655,7 +661,8 @@ def reload_canvas(menu_name):    # 更新画布
         baidu_fanyi_frame.grid_forget()
 
         # 7、显示肉鸡面板
-        rouji_command_panel.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        canvas.grid_forget()
+        rouji_command_panel.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
     else:
         ## 隐藏 其他的菜单栏
         note_frame.grid_forget()  # 隐藏note临时笔记操作
@@ -664,6 +671,12 @@ def reload_canvas(menu_name):    # 更新画布
         encode_decode_frame.grid_forget()  # 隐藏编解码
         baidu_fanyi_frame.grid_forget() # 隐藏百度翻译
         rouji_command_panel.grid_forget()   # 隐藏肉鸡面板
+
+        # 恢复 canvas（固定面板隐藏后，工具按钮区回到 row=1，padding 与初始一致）
+        canvas.grid(row=1, column=0,
+                    padx=int(root.winfo_width() * 0.02),
+                    pady=int(root.winfo_height() * 0.08),
+                    sticky="nsew")
 
         # 1、更新画布的文本为 菜单栏名称
         canvas.itemconfigure(text_id, text=menu_name, fill=get_menu_color_one(menu_name))
@@ -989,9 +1002,12 @@ def show_menu():
     p = ui_theme.active_palette()
 
     # 1、自绘菜单栏容器（grid row0；画布 row1；状态栏 row2）
-    menu_bar_frame = Frame(root, bg=p["bg"], highlightbackground=p["border"],
-                           highlightthickness=(0, 0, 1, 0))
+    menu_bar_frame = Frame(root, bg=p["bg"])
     menu_bar_frame.grid(row=0, column=0, sticky="we")
+    # 菜单栏与画布之间的 1px 分隔线（highlightthickness 不支持按方向拆分，用内部子 Frame）
+    _menu_sep = Frame(menu_bar_frame, bg=p["border"], height=1, highlightthickness=0)
+    _menu_sep.pack(fill="x", side="bottom")
+    ui_theme.register(_menu_sep, "menu_sep")
     ui_theme.register(menu_bar_frame, "menu_bar")
 
     item_btns = {}   # 菜单名 -> 按钮（用于高亮当前激活项）
@@ -1003,7 +1019,10 @@ def show_menu():
                    font=ui_theme.F["ui"], anchor="w", padx=10, pady=4,
                    command=command)
         if drop_menu is not None:
-            b.config(menu=drop_menu)  # 点击展开原生下拉（下拉弹层仍是系统样式）
+            # 用 Button + 手动 post 弹出原生 Menu，避免 Menubutton 按住才展开的交互问题
+            def _post_menu(event):
+                drop_menu.post(event.x_root, event.y_root)
+            b.bind("<Button-1>", _post_menu)
         b.pack(side="left")
         ui_theme.register(b, "menu_button")
         return b
@@ -1042,7 +1061,7 @@ def show_menu():
     for label, name in [("AI对话模型", "ai_ask"), ("汉英翻译", "baidu_fanyi"),
                         ("编解码", "encode_decode"), ("肉鸡面板", "rouji_panel"),
                         ("临时笔记", "note_nemu")]:
-        b = _mk_button(label, command=_select_menu(label, None))
+        b = _mk_button(label, command=_select_menu(name, None))
         item_btns[label] = b
 
     # 回填菜单栏高度（供导航栏 place 的 y 偏移）
@@ -1213,27 +1232,29 @@ def create_note():
     global note_frame, text_area, line_numbers_canvas, last_line_count
 
     THEME = {
-        "bg": "#D9D9D9",          # 与AI对话模型相同的背景色
-        "fg": "#2c3e50",          # 深蓝色文字
-        "line_highlight": "#d1e7ff",  # 当前行高亮
-        "cursor": "#007acc",      # 光标颜色
-        "selection": "#a8d1ff",   # 选中背景
-        "gutter_bg": "#e0e0e0",   # 行号区域背景
-        "gutter_fg": "#999"       # 行号颜色
+        "bg": ui_theme.COLORS["note_bg"],         # 笔记编辑器背景（随主题）
+        "fg": ui_theme.COLORS["note_fg"],         # 深蓝/亮色文字
+        "line_highlight": ui_theme.COLORS["note_line_hl"],
+        "cursor": ui_theme.COLORS["note_cursor"],
+        "selection": ui_theme.COLORS["note_sel"],
+        "gutter_bg": ui_theme.COLORS["note_gutter_bg"],
+        "gutter_fg": ui_theme.COLORS["note_gutter_fg"],
     }
 
     last_line_count = 0
     FONT = ("Consolas", 11)
 
-    note_frame = Frame(root, bg="white", highlightbackground="#ccc",
+    note_frame = Frame(root, bg=ui_theme.COLORS["panel"], highlightbackground=ui_theme.COLORS["border"],
                        highlightthickness=1, relief="solid")
-    note_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+    ui_theme.register(note_frame, "panel_frame")
+    note_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
     line_numbers_canvas = Canvas(note_frame,
                                  width=50,
                                  bg=THEME["gutter_bg"],
                                  highlightthickness=0,
                                  takefocus=0)
+    ui_theme.register(line_numbers_canvas, "note_gutter")
     line_numbers_canvas.grid(row=0, column=0, sticky="ns")
     line_numbers_canvas.grid_propagate(False)
 
@@ -1244,13 +1265,14 @@ def create_note():
                      insertbackground=THEME["cursor"],
                      insertwidth=2,
                      selectbackground=THEME["selection"],
-                     selectforeground="black",
+                     selectforeground=ui_theme.COLORS["note_sel_fg"],
                      font=FONT,
                      undo=True,
                      relief="flat",
                      borderwidth=0,
                      padx=5,
                      pady=5)
+    ui_theme.register(text_area, "note")
     text_area.grid(row=0, column=1, sticky="nsew")
 
     def update_line_numbers():
@@ -1427,6 +1449,10 @@ def create_note():
 
     line_numbers_canvas.bind("<Configure>", on_canvas_resize)
 
+    # 注册经典滚动条随主题切换（tk.Scrollbar 不受 ttk 样式控制）
+    for _sb in (v_scroll, h_scroll):
+        ui_theme.register(_sb, "classic_scroll")
+
     note_frame.after(200, lambda: [update_line_numbers(), highlight_current_line()])
 
     note_frame.grid_rowconfigure(0, weight=1)
@@ -1437,19 +1463,29 @@ def create_note():
 def create_encode_decode():
     global encode_decode_frame
 
+    p = ui_theme.active_palette()
+
     # 创建主框架
-    encode_decode_frame = Frame(root, bg="white", highlightbackground="black", highlightthickness=1, relief="solid")
+    encode_decode_frame = Frame(root, bg=p["panel"], highlightbackground=p["border"], highlightthickness=1, relief="solid")
+    ui_theme.register(encode_decode_frame, "panel_frame")
 
     # 创建一个统一的按钮容器，实现水平排列和自动换行，放在输入框上方
-    buttons_container = Frame(encode_decode_frame)
+    buttons_container = Frame(encode_decode_frame, bg=p["panel"])
+    ui_theme.register(buttons_container, "panel_frame")
     buttons_container.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
 
     # 左侧输入框
-    input_text = scrolledtext.ScrolledText(encode_decode_frame, wrap="word", height=10, font=("Consolas", 12))
+    input_text = scrolledtext.ScrolledText(encode_decode_frame, wrap="word", height=10, font=("Consolas", 12),
+                                           bg=p["panel"], fg=p["text"])
+    ui_theme.register(input_text, "panel_text")
+    ui_theme.register(input_text.vbar, "classic_scroll")   # 内部滚动条随主题
     input_text.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
 
     # 右侧输出框
-    output_text = scrolledtext.ScrolledText(encode_decode_frame, wrap="word", height=10, font=("Consolas", 12))
+    output_text = scrolledtext.ScrolledText(encode_decode_frame, wrap="word", height=10, font=("Consolas", 12),
+                                            bg=p["panel"], fg=p["text"])
+    ui_theme.register(output_text, "panel_text")
+    ui_theme.register(output_text.vbar, "classic_scroll")  # 内部滚动条随主题
     output_text.grid(row=1, column=1, padx=5, pady=5, sticky="nsew")
 
     # 添加加解密功能函数
@@ -1524,15 +1560,23 @@ def create_encode_decode():
             output_widget.insert(END, md5_encode(text))
 
     # 添加所有按钮，使用pack布局实现水平排列和自动换行，移除间隙，根据文本内容自动调整宽度
-    Button(buttons_container, text="URL编码", command=lambda: url_encode_action(input_text, output_text)).pack(side="left", padx=0, pady=0)
-    Button(buttons_container, text="URL解码", command=lambda: url_decode_action(input_text, output_text)).pack(side="left", padx=0, pady=0)
-    Button(buttons_container, text="Base64编码", command=lambda: base64_encode_action(input_text, output_text)).pack(side="left", padx=0, pady=0)
-    Button(buttons_container, text="Base64解码", command=lambda: base64_decode_action(input_text, output_text)).pack(side="left", padx=0, pady=0)
-    Button(buttons_container, text="Unicode编码", command=lambda: unicode_encode_action(input_text, output_text)).pack(side="left", padx=0, pady=0)
-    Button(buttons_container, text="Unicode解码", command=lambda: unicode_decode_action(input_text, output_text)).pack(side="left", padx=0, pady=0)
-    Button(buttons_container, text="乱码修复", command=lambda: utf8_decode_action(input_text, output_text)).pack(side="left", padx=0, pady=0)
-    Button(buttons_container, text="Json格式化", command=lambda: json_format_action(input_text, output_text)).pack(side="left", padx=0, pady=0)
-    Button(buttons_container, text="MD5编码", command=lambda: md5_encode_action(input_text, output_text)).pack(side="left", padx=0, pady=0)
+    _btn_style = dict(bg=p["heading_bg"], fg=p["text"],
+                      activebackground=p["heading_active"], activeforeground=p["accent"],
+                      relief="flat")
+    _enc_btns = [
+        Button(buttons_container, text="URL编码", command=lambda: url_encode_action(input_text, output_text), **_btn_style),
+        Button(buttons_container, text="URL解码", command=lambda: url_decode_action(input_text, output_text), **_btn_style),
+        Button(buttons_container, text="Base64编码", command=lambda: base64_encode_action(input_text, output_text), **_btn_style),
+        Button(buttons_container, text="Base64解码", command=lambda: base64_decode_action(input_text, output_text), **_btn_style),
+        Button(buttons_container, text="Unicode编码", command=lambda: unicode_encode_action(input_text, output_text), **_btn_style),
+        Button(buttons_container, text="Unicode解码", command=lambda: unicode_decode_action(input_text, output_text), **_btn_style),
+        Button(buttons_container, text="乱码修复", command=lambda: utf8_decode_action(input_text, output_text), **_btn_style),
+        Button(buttons_container, text="Json格式化", command=lambda: json_format_action(input_text, output_text), **_btn_style),
+        Button(buttons_container, text="MD5编码", command=lambda: md5_encode_action(input_text, output_text), **_btn_style),
+    ]
+    for _b in _enc_btns:
+        ui_theme.register(_b, "fanyi_button")
+        _b.pack(side="left", padx=0, pady=0)
 
     # 配置行列权重
     encode_decode_frame.grid_rowconfigure(1, weight=1)  # 输入输出框所在行权重为1
@@ -1619,18 +1663,23 @@ def create_ai_ask():
         chat_box.tag_configure('ai', foreground='blue')      # AI响应文本蓝色
 
     # 创建 AI 对话框的 Frame
-    ai_frame = Frame(root, bg="white", highlightbackground="black", highlightthickness=1, relief="solid")
-    ai_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+    p = ui_theme.active_palette()
+    ai_frame = Frame(root, bg=p["panel"], highlightbackground=p["border"], highlightthickness=1, relief="solid")
+    ui_theme.register(ai_frame, "panel_frame")
+    ai_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
     # 创建滚动文本框用于显示对话记录
-    chat_box = scrolledtext.ScrolledText(ai_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["ui"])
+    chat_box = scrolledtext.ScrolledText(ai_frame, wrap="word", bg=p["panel"], fg=p["text"], font=ui_theme.F["ui"])
     ui_theme.register(chat_box, "panel_text")
+    ui_theme.register(chat_box.vbar, "classic_scroll")
     chat_box.grid(row=0, column=0, columnspan=2, sticky="nsew")
 
     # 禁止输入
     chat_box.config(state=DISABLED)
 
     # 创建输入框，使用 Text 组件以支持换行
-    text_box = Text(ai_frame, width=50, height=4, wrap="word")
+    text_box = Text(ai_frame, width=50, height=4, wrap="word",
+                    bg=p["entry_bg"], fg=p["text"], insertbackground=p["text"])
+    ui_theme.register(text_box, "entry")
     text_box.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
 
     # 定义一个函数来添加和删除提示语
@@ -1656,7 +1705,7 @@ def create_ai_ask():
 
     def on_focusin(event):
         if event.widget.get("1.0", END).strip() == placeholder_text:
-            event.widget.configure(state='normal', background='white')
+            event.widget.configure(state='normal', background=ui_theme.active_palette()["entry_bg"])
             event.widget.delete("1.0", END)
 
     # 绑定文本框获取与失去焦点事件
@@ -1667,7 +1716,10 @@ def create_ai_ask():
     text_box.bind("<Shift-Return>", lambda event: on_send(text_box, chat_box))
 
     # 创建发送按钮
-    send_button = Button(ai_frame, text="发送", command=lambda: on_send(text_box, chat_box))
+    send_button = Button(ai_frame, text="发送", command=lambda: on_send(text_box, chat_box),
+                         bg=p["accent"], fg="white",
+                         activebackground=p["accent_hi"], activeforeground="white")
+    ui_theme.register(send_button, "panel_button")
     ui_theme.make_tooltip(send_button, "发送消息给当前 AI（Shift+Enter 亦可发送）")
     send_button.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
 
@@ -1770,24 +1822,32 @@ def create_ai_ask_two():
         chat_box.tag_configure('ai', foreground='blue')      # AI响应文本蓝色
 
     # 创建 AI 对话框的 Frame
-    ai_frame = Frame(root, bg="white", highlightbackground="black", highlightthickness=0, relief="solid")
-    ai_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+    p = ui_theme.active_palette()
+    ai_frame = Frame(root, bg=p["panel"], highlightbackground=p["border"], highlightthickness=0, relief="solid")
+    ui_theme.register(ai_frame, "panel_frame")
+    ai_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
     # 创建左侧AI对话框
-    left_ai_frame = Frame(ai_frame, bg="lightblue", highlightbackground="black", highlightthickness=1, relief="solid")
+    left_ai_frame = Frame(ai_frame, bg=p["tint_blue"], highlightbackground=p["border"], highlightthickness=1, relief="solid")
+    left_ai_frame.tint_key = "tint_blue"
+    ui_theme.register(left_ai_frame, "tint")
     left_ai_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 
     # 创建右侧AI对话框
-    right_ai_frame = Frame(ai_frame, bg="lightgreen", highlightbackground="black", highlightthickness=1, relief="solid")
+    right_ai_frame = Frame(ai_frame, bg=p["tint_green"], highlightbackground=p["border"], highlightthickness=1, relief="solid")
+    right_ai_frame.tint_key = "tint_green"
+    ui_theme.register(right_ai_frame, "tint")
     right_ai_frame.grid(row=0, column=1, columnspan=2, sticky="nsew", padx=5, pady=5)
 
     # 创建滚动文本框用于显示对话记录
-    left_chat_box = scrolledtext.ScrolledText(left_ai_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["ui"])
+    left_chat_box = scrolledtext.ScrolledText(left_ai_frame, wrap="word", bg=p["panel"], fg=p["text"], font=ui_theme.F["ui"])
     ui_theme.register(left_chat_box, "panel_text")
+    ui_theme.register(left_chat_box.vbar, "classic_scroll")
     left_chat_box.grid(row=0, column=0, sticky="nsew")
 
-    right_chat_box = scrolledtext.ScrolledText(right_ai_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["ui"])
+    right_chat_box = scrolledtext.ScrolledText(right_ai_frame, wrap="word", bg=p["panel"], fg=p["text"], font=ui_theme.F["ui"])
     ui_theme.register(right_chat_box, "panel_text")
+    ui_theme.register(right_chat_box.vbar, "classic_scroll")
     right_chat_box.grid(row=0, column=0, columnspan=2, sticky="nsew")
 
     # 禁止输入
@@ -1795,7 +1855,9 @@ def create_ai_ask_two():
     right_chat_box.config(state=DISABLED)
 
     # 创建输入框，使用 Text 组件以支持换行
-    text_box = Text(ai_frame, width=50, height=4, wrap="word")
+    text_box = Text(ai_frame, width=50, height=4, wrap="word",
+                    bg=p["entry_bg"], fg=p["text"], insertbackground=p["text"])
+    ui_theme.register(text_box, "entry")
     text_box.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
 
     # 定义一个函数来添加和删除提示语
@@ -1821,7 +1883,7 @@ def create_ai_ask_two():
 
     def on_focusin(event):
         if event.widget.get("1.0", END).strip() == placeholder_text:
-            event.widget.configure(state='normal', background='white')
+            event.widget.configure(state='normal', background=ui_theme.active_palette()["entry_bg"])
             event.widget.delete("1.0", END)
 
     # 绑定文本框获取与失去焦点事件
@@ -1849,7 +1911,10 @@ def create_ai_ask_two():
     text_box.bind("<Shift-Return>", lambda event: on_sent_two(ai_two_names[0], ai_two_names[1]))
 
     # 创建发送按钮
-    send_button = Button(ai_frame, text="发送", command=lambda: on_sent_two(ai_two_names[0], ai_two_names[1]))
+    send_button = Button(ai_frame, text="发送", command=lambda: on_sent_two(ai_two_names[0], ai_two_names[1]),
+                         bg=p["accent"], fg="white",
+                         activebackground=p["accent_hi"], activeforeground="white")
+    ui_theme.register(send_button, "panel_button")
     ui_theme.make_tooltip(send_button, "同时向两个 AI 发送并对比回答（Shift+Enter 亦可）")
     send_button.grid(row=1, column=2, padx=10, pady=5, sticky="ew")
 
@@ -1887,12 +1952,15 @@ def create_ai_ask_two():
 def baidu_fanyi():
     global baidu_fanyi_frame
 
+    p = ui_theme.active_palette()
     # 创建主框架
-    fanyi_frame = Frame(root, bg="white", highlightbackground="black", highlightthickness=1, relief="solid")
-    fanyi_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+    fanyi_frame = Frame(root, bg=p["panel"], highlightbackground=p["border"], highlightthickness=1, relief="solid")
+    ui_theme.register(fanyi_frame, "panel_frame")
+    fanyi_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
     # 创建文本输入框提示和语言选择
-    fanyi_label = Label(fanyi_frame, text="输入文本：", bg="white")
+    fanyi_label = Label(fanyi_frame, text="输入文本：", bg=p["panel"], fg=p["text"])
+    ui_theme.register(fanyi_label, "fanyi_label")
     fanyi_label.grid(row=0, column=0, sticky="w", padx=5, pady=5)
 
     # 创建翻译方向选择
@@ -1910,20 +1978,25 @@ def baidu_fanyi():
         # 获取当前语言对
         return translation_direction
 
-    direction_button = Button(fanyi_frame, text="翻译方向: 英文 -> 中文", command=toggle_translation_direction)
+    direction_button = Button(fanyi_frame, text="翻译方向: 英文 -> 中文", command=toggle_translation_direction,
+                              bg=p["heading_bg"], fg=p["text"],
+                              activebackground=p["heading_active"], activeforeground=p["accent"],
+                              relief="flat")
+    ui_theme.register(direction_button, "fanyi_button")
     direction_button.grid(row=0, column=1, sticky="e", padx=5, pady=5)
 
     # 创建文本输入框
-    input_textbox = Text(fanyi_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["mono"])
+    input_textbox = Text(fanyi_frame, wrap="word", bg=p["panel"], fg=p["text"], font=ui_theme.F["mono"])
     ui_theme.register(input_textbox, "panel_text")
     input_textbox.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
 
     # 创建输出文本提示
-    output_label = Label(fanyi_frame, text="翻译结果：", bg="white")
+    output_label = Label(fanyi_frame, text="翻译结果：", bg=p["panel"], fg=p["text"])
+    ui_theme.register(output_label, "fanyi_label")
     output_label.grid(row=2, column=0, sticky="w", padx=5, pady=5)
 
     # 创建输出文本框
-    output_textbox = Text(fanyi_frame, wrap="word", bg=ui_theme.COLORS["panel"], fg=ui_theme.COLORS["text"], font=ui_theme.F["mono"])
+    output_textbox = Text(fanyi_frame, wrap="word", bg=p["panel"], fg=p["text"], font=ui_theme.F["mono"])
     ui_theme.register(output_textbox, "panel_text")
     output_textbox.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
 
@@ -1954,7 +2027,10 @@ def baidu_fanyi():
             threading.Thread(target=_translate_worker, daemon=True).start()
 
     # 创建翻译按钮
-    translate_button = Button(fanyi_frame, text="翻译", command=on_translate_click)
+    translate_button = Button(fanyi_frame, text="翻译", command=on_translate_click,
+                              bg=p["accent"], fg="white",
+                              activebackground=p["accent_hi"], activeforeground="white")
+    ui_theme.register(translate_button, "panel_button")
     ui_theme.make_tooltip(translate_button, "翻译输入框文本；需 config/baidu.py 配置百度翻译凭证")
     translate_button.grid(row=5, column=0, pady=10)
 
@@ -1963,9 +2039,9 @@ def baidu_fanyi():
     placeholder_text = "Shift+Enter 发送消息，将默认按照字符串的第一个字符判断翻译方向"
 
     def set_placeholder(widget, text):
-        # 设置提示语
+        # 设置提示语（背景跟随当前主题面板色，避免深色下闪浅灰）
         widget.insert("1.0", text)
-        widget.config(state='disabled', background='gray90')
+        widget.config(state='disabled', background=ui_theme.active_palette()["panel"])
 
     def on_focusout(event):
         # 当文本框失去焦点时，检查文本框内容是否为空，如果为空则显示提示语
@@ -2088,8 +2164,10 @@ def rouji_panel():
             menu.post(event.x_root, event.y_root)
 
     # 创建包含Treeview的Frame
-    rouji_frame = Frame(root, bg="white", highlightbackground="black", highlightthickness=1, relief="solid")
-    rouji_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+    p = ui_theme.active_palette()
+    rouji_frame = Frame(root, bg=p["panel"], highlightbackground=p["border"], highlightthickness=1, relief="solid")
+    ui_theme.register(rouji_frame, "panel_frame")
+    rouji_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
     # 创建分割窗口
     paned_window = PanedWindow(rouji_frame, orient=VERTICAL)
@@ -2361,7 +2439,8 @@ def rouji_panel():
         # 清除文本框中的所有内容
         command_line.delete("1.0", END)
     ### ----------------------------------------------------------------------
-    nav_frame_two = Frame(paned_window)
+    nav_frame_two = Frame(paned_window, bg=p["panel"])
+    ui_theme.register(nav_frame_two, "panel_frame")
     nav_frame_two.pack(expand=True, fill=X)  # 使用pack使其填充可用空间
 
     # 配置行和列的权重
@@ -2371,10 +2450,18 @@ def rouji_panel():
     nav_frame_two.grid_columnconfigure(2, weight=1)  # 设定第三列的权重为1
 
     # 创建命令行控件
-    # command_line = Text(nav_frame_two, height=10, bg="gray90", fg="black", font=("Microsoft YaHei", 10, "bold"))  # 使用Text控件作为命令行
-    command_line = Text(nav_frame_two, height=10)  # 使用Text控件作为命令行
-    ui_theme.apply_console(command_line)  # 控制台配色 + 预定义 tag
-    ui_theme.register(command_line, "console")  # 随主题切换重套色
+    # 命令行区跟随面板配色（浅=白、深=深），而非恒暗控制台，避免浅色下面板局部发黑
+    command_line = Text(nav_frame_two, height=10,
+                        bg=p["panel"], fg=p["text"],
+                        insertbackground=p["text"],
+                        selectbackground=p["accent"], selectforeground="white",
+                        font=ui_theme.F["mono"], wrap="word")
+    # 预定义常用 tag（随主题重套）
+    for _tag, _fg in (("info", p["text"]), ("success", p["success"]),
+                      ("warn", p["warn"]), ("error", p["error"]),
+                      ("cmd", p["accent"]), ("orange", p["accent"])):
+        command_line.tag_configure(_tag, foreground=_fg)
+    ui_theme.register(command_line, "console_light")  # 随主题切换重套色
     command_line.grid(row=0, column=0, columnspan=9,sticky=NSEW)  # 使用grid使其填
 
     # 绑定 enter 回车 事件
@@ -2415,30 +2502,44 @@ def rouji_panel():
         server_json = get_server_json()
 
     # 配置button_frame的列权重
-    label_IP = Label(nav_frame_two, text="连接IP:")
+    _rp = ui_theme.active_palette()
+    label_IP = Label(nav_frame_two, text="连接IP:", bg=_rp["panel"], fg=_rp["text"])
+    ui_theme.register(label_IP, "rouji_label")
     label_IP.grid(row=1, column=0, padx=(0, 10), sticky='e')  # 对齐到列的东侧
-    server_IP_entry = Entry(nav_frame_two, textvariable=StringVar(value=server_json["server_ip"]))
+    server_IP_entry = Entry(nav_frame_two, textvariable=StringVar(value=server_json["server_ip"]),
+                            bg=_rp["entry_bg"], fg=_rp["text"])
+    ui_theme.register(server_IP_entry, "rouji_input")
     server_IP_entry.grid(row=1, column=1, padx=(10, 0), sticky='w')  # 紧随label之后
 
-    label_Port = Label(nav_frame_two, text="连接端口:")
+    label_Port = Label(nav_frame_two, text="连接端口:", bg=_rp["panel"], fg=_rp["text"])
+    ui_theme.register(label_Port, "rouji_label")
     label_Port.grid(row=1, column=2, padx=(0, 10), sticky='e')  # 对齐到列的东侧
-    server_Port_entry = Entry(nav_frame_two, textvariable=StringVar(value=server_json["server_port"]))
+    server_Port_entry = Entry(nav_frame_two, textvariable=StringVar(value=server_json["server_port"]),
+                              bg=_rp["entry_bg"], fg=_rp["text"])
+    ui_theme.register(server_Port_entry, "rouji_input")
     server_Port_entry.grid(row=1, column=3, padx=(10, 0), sticky='w')  # 紧随label之后
 
-    button1 = Button(nav_frame_two, text="连接服务端", command=muma_listen_setting)
+    _rb_style = dict(bg=_rp["heading_bg"], fg=_rp["text"],
+                     activebackground=_rp["heading_active"], activeforeground=_rp["accent"])
+    button1 = Button(nav_frame_two, text="连接服务端", command=muma_listen_setting, **_rb_style)
+    ui_theme.register(button1, "rouji_button")
     ui_theme.make_tooltip(button1, "连接 server.py 服务端并列出 / 管理肉鸡")
     button1.grid(row=1, column=4, padx=(10, 50),sticky="w")
 
-    button2 = Button(nav_frame_two, text="生成py木马", command=add_py_muma)
+    button2 = Button(nav_frame_two, text="生成py木马", command=add_py_muma, **_rb_style)
+    ui_theme.register(button2, "rouji_button")
     button2.grid(row=1, column=5, padx=(10, 10),sticky="w")
 
-    button3 = Button(nav_frame_two, text="生成pyexe木马", command=add_py_exe_muma)
+    button3 = Button(nav_frame_two, text="生成pyexe木马", command=add_py_exe_muma, **_rb_style)
+    ui_theme.register(button3, "rouji_button")
     button3.grid(row=1, column=6, padx=(10, 10),sticky="w")
 
-    button4 = Button(nav_frame_two, text="生成Go木马", command=add_go_muma)
+    button4 = Button(nav_frame_two, text="生成Go木马", command=add_go_muma, **_rb_style)
+    ui_theme.register(button4, "rouji_button")
     button4.grid(row=1, column=7, padx=(10, 10),sticky="w")
 
-    button5 = Button(nav_frame_two, text="生成Goexe木马", command=add_go_exe_muma)
+    button5 = Button(nav_frame_two, text="生成Goexe木马", command=add_go_exe_muma, **_rb_style)
+    ui_theme.register(button5, "rouji_button")
     button5.grid(row=1, column=8, padx=(10, 10),sticky="w")
 
     # P5: 文件传输进度条（不确定模式；C2 get 下载协议不带总字节数，

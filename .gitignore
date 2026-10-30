@@ -14,3 +14,6 @@ config/ai_ask.json
 config/accounts.json
 config/windowSize.json
 config/baidu.py
+
+# Agnes 工作目录（含用户个人上传/截图，不随仓库分发）
+.agnes/
