@@ -1,0 +1,193 @@
+/* ===== 终端管理面板（本地终端 + SSH 远端命令；显式化旧版 create_local_cmd） ===== */
+.shell-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--console-bg, #14151a);
+  color: var(--console-fg, #e6e6e6);
+  font-family: var(--font-mono);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.shell-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  flex: 0 0 auto;
+  background: var(--heading-bg);
+  border-bottom: 1px solid var(--border);
+}
+.shell-bar__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+/* 当前工作目录：路径芯片（图标 + 中段省略，悬停 title 看全路径） */
+.shell-bar__cwd {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 60px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--console-bg, #14151a);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.shell-bar__cwd svg { flex: 0 0 auto; color: var(--accent); }
+.shell-bar__cwd-text { overflow: hidden; text-overflow: ellipsis; }
+/* 远端主机芯片（SSH 模式）：accent 描边 + 内嵌断开按钮 */
+.shell-bar__cwd--remote { border-color: var(--accent); color: var(--accent); }
+.shell-bar__disconnect {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  margin-left: 2px;
+  border: none; border-radius: 4px;
+  background: transparent; color: var(--muted);
+  cursor: pointer; flex: 0 0 auto;
+}
+.shell-bar__disconnect:hover { color: var(--error, #e5484d); background: var(--heading-active); }
+.shell-bar__tools { display: inline-flex; align-items: center; gap: 4px; }
+/* 终端类型（cmd / PowerShell / pwsh）：紧凑 select，自带 chevron */
+.shell-bar__shell {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 20px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238a919e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 5px center;
+}
+.shell-bar__shell:hover { border-color: var(--accent); color: var(--accent); }
+.shell-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel); color: var(--text);
+  cursor: pointer;
+}
+.shell-ic:hover { border-color: var(--accent); color: var(--accent); }
+.shell-bar__fs { font-size: 11px; color: var(--muted); min-width: 34px; text-align: center; font-family: var(--font-ui); }
+
+.shell-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.shell-out {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 10px 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 命令块：命令 + 其结果归为一块，块与块之间用虚线分隔（视觉分组） */
+.shell-block { min-height: 1em; }
+.shell-block + .shell-block {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--border) 75%, transparent);
+}
+.shell-line { min-height: 1em; }
+.shell-line--cmd  { color: #57d364; font-weight: 600; }   /* 用户命令：绿色，与结果（白/浅灰）拉开区分 */
+.shell-line__sigil {
+  display: inline-block;
+  margin-right: 9px;
+  color: #2ea04f;
+  font-weight: 700;
+}
+.shell-line--out  { color: var(--console-fg, #e6e6e6); }
+.shell-line--err  { color: #ff7a7a; }
+.shell-line--info { color: #8f97a8; font-style: italic; }
+
+/* 补全浮层（贴在输入行上方） */
+.shell-sug {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  max-height: 120px;
+  overflow: auto;
+}
+.shell-sug__item {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.shell-sug__item:hover, .shell-sug__item.active { border-color: var(--accent); color: var(--accent); }
+.shell-sug__hint { width: 100%; font-size: 11px; color: var(--muted); font-family: var(--font-ui); padding-top: 2px; }
+
+/* 提示符 + 输入行：绿色 ❯ 引导 + 圆角输入域（聚焦发光） */
+.shell-prompt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  background: var(--heading-bg);
+}
+.shell-prompt__sigil { color: #57d364; font-weight: 700; flex: 0 0 auto; font-size: 1.05em; }
+.shell-prompt__field {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--console-bg, #14151a);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.shell-prompt__field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.shell-prompt__input {
+  flex: 1 1 auto;
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--console-fg, #e6e6e6);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  caret-color: #57d364;
+}
+.shell-prompt__input::placeholder { color: var(--muted); font-family: var(--font-ui); }
+.shell-prompt__busy {
+  color: var(--accent);
+  display: inline-block;
+  flex: 0 0 auto;
+  animation: shell-spin 0.9s linear infinite;
+}
+@keyframes shell-spin { to { transform: rotate(360deg); } }
+
+/* 深色下控制台变量兜底（若 tokens 未定义 --console-*） */
+[data-theme="dark"] .shell-panel { background: #14151a; color: #e6e6e6; }

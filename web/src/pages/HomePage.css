@@ -1,0 +1,139 @@
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.home-card {
+  max-width: none;
+}
+
+.home-title {
+  margin: 0 0 4px;
+  font-size: 20px;
+  color: var(--text);
+}
+
+.home-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.home-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+}
+.home-status[data-state="online"] { color: var(--success); border-color: var(--success); }
+.home-status[data-state="offline"] { color: var(--error); border-color: var(--error); }
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .home-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.home-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color 0.15s, transform 0.15s;
+}
+.home-tile:hover { border-color: var(--accent); transform: translateY(-2px); }
+
+/* 设置卡是 <button>，重置默认样式使其与 Link 卡一致 */
+.home-tile--btn {
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+.home-tile--btn:hover { border-color: var(--accent); transform: translateY(-2px); }
+
+.home-tile__icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--accent-lo);
+  color: var(--accent);
+}
+
+.home-tile__title { font-size: 14px; font-weight: 600; }
+.home-tile__desc { font-size: 12px; color: var(--muted); line-height: 1.4; }
+
+/* ===== 动态用户菜单区（config.json 驱动） ===== */
+.home-menus {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.home-menus__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.home-menus__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.home-menus__hint { font-size: 12px; color: var(--muted); flex: 1 1 auto; }
+.home-menus__refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+.home-menus__refresh:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.home-menus__refresh:disabled { opacity: 0.4; cursor: not-allowed; }
+.home-menus__empty {
+  padding: 18px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+.home-menus .home-tile--menu { text-align: left; font-family: var(--font-ui); cursor: pointer; }
+.home-menus .home-tile--menu:hover { border-color: var(--accent); transform: translateY(-2px); }
+.home-menu-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  display: block;
+}
+.home-menus .home-tile__icon { background: transparent; }
+.spin { animation: hm-rot 0.8s linear infinite; }
+@keyframes hm-rot { to { transform: rotate(360deg); } }

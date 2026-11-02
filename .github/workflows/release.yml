@@ -1,0 +1,118 @@
+# 破晓·工具箱 —— 多平台打包 & GitHub Release
+# 触发：
+#   - push 标签 v*（四个平台并行构建，首个上传步骤幂等创建 Release 后挂附件）
+#   - 手动 workflow_dispatch（仅构建，产物存普通 Artifact）
+#
+# 附件命名：Daybreak-Toolbox-<tag|-manual-><平台>.zip
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact-suffix: win-x64
+            pyinstaller: --onefile --noconsole
+            add-data-sep: ";"
+          - os: macos-latest
+            artifact-suffix: mac-arm64
+            pyinstaller: --onefile --windowed
+            add-data-sep: ":"
+          - os: macos-15
+            artifact-suffix: mac-x64
+            pyinstaller: --onefile --windowed
+            add-data-sep: ":"
+          - os: ubuntu-24.04
+            artifact-suffix: linux-x64
+            pyinstaller: --onefile
+            add-data-sep: ":"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Build web frontend (vite → web/dist)
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Install dependencies + PyInstaller
+        run: |
+          pip install -r requirements.txt
+          pip install "setuptools<81" pyinstaller
+
+      - name: Build executable
+        shell: bash
+        run: |
+          sep="${{ matrix.add-data-sep }}"
+          pyinstaller --name DaybreakToolbox --clean --noconfirm \
+            --exclude-module keyring --exclude-module pywebview \
+            --exclude-module transformers --exclude-module torch \
+            --exclude-module torchvision --exclude-module torchaudio \
+            --exclude-module datasets --exclude-module tokenizers \
+            --add-data "web/dist${sep}dist" --add-data "config${sep}config" \
+            ${{ matrix.pyinstaller }} run_bridge.py
+          echo "build done: $(ls dist | head -5 | tr '\n' ' ')"
+
+      - name: Package zip (跨平台统一用 python shutil)
+        shell: bash
+        run: |
+          case "${{ github.ref_name }}" in
+            v*) ver="${{ github.ref_name }}" ;;
+            *)  ver="manual" ;;
+          esac
+          out="Daybreak-Toolbox-${ver}-${{ matrix.artifact-suffix }}"
+          python -c "import shutil; shutil.make_archive('${out}', 'zip', 'dist')"
+          ls -la "${out}.zip"
+
+      - name: Upload to GitHub Release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          case "${{ github.ref_name }}" in
+            v*) ver="${{ github.ref_name }}" ;;
+            *)  ver="manual" ;;
+          esac
+          # 幂等建 Release（4 平台并行：先完成者创建，其余跳过）
+          if ! gh release view "$ver" >/dev/null 2>&1; then
+            gh release create "$ver" \
+              --title "Daybreak Toolbox $ver" \
+              --notes "破晓·工具箱 $ver 多平台安装包（Windows / macOS / Linux）。
+              Windows：解压运行 DaybreakToolbox.exe（托盘 + 悬浮球）；
+              macOS：双击 DaybreakToolbox.app（首次 右键→打开 绕过 Gatekeeper）；
+              Linux：解压运行 ./DaybreakToolbox（需系统含 libgtk；悬浮球/托盘仅 Windows 生效）。" \
+              --target "${{ github.sha }}" || echo "release create raced/skipped"
+          fi
+          for i in 1 2 3 4 5; do
+            gh release upload "$ver" "Daybreak-Toolbox-${ver}-${{ matrix.artifact-suffix }}.zip" --clobber && break
+            sleep $((i * 5))
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload build artifact (manual / non-tag)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: daybreak-${{ matrix.artifact-suffix }}
+          path: "Daybreak-Toolbox-*.zip"
+          if-no-files-found: error

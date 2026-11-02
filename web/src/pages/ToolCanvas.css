@@ -1,0 +1,140 @@
+/* ===== 工具画布页（/tools/:menu/:nav）===== */
+.tool-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+.tool-canvas__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tool-canvas__crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  color: var(--text);
+}
+.tool-canvas__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.tool-canvas__sep { color: var(--muted); margin: 0 2px; }
+.tool-canvas__home {
+  font-size: 12px;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.tool-canvas__home:hover { border-color: var(--accent); color: var(--accent); }
+
+.tool-canvas__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+.tool-canvas__empty--err { color: var(--error); }
+.tool-canvas__hint { font-size: 12px; opacity: 0.8; max-width: 520px; }
+/* 空态中央 虚线 ＋ 按钮：点击直达 工具管理（预选当前 菜单栏/导航栏 添加工具） */
+.tool-canvas__add {
+  width: 76px;
+  height: 76px;
+  margin: 8px auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.tool-canvas__add:hover {
+  background: var(--accent-lo);
+  transform: scale(1.05);
+}
+
+/* 工具按钮网格：旧版 canvas 每行 5-6 个 */
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  overflow: auto;
+  align-content: start;
+}
+
+.tool-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px 14px;
+  min-height: 64px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.tool-btn:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-1px); }
+.tool-btn--link { color: var(--accent); }
+.tool-btn--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--panel);
+  color: var(--muted);
+}
+.tool-btn__name { font-weight: 600; word-break: break-all; }
+.tool-btn__meta { font-size: 11px; color: var(--muted); }
+
+.tool-notice {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.2);
+}
+.tool-notice.ok { border-color: var(--success); color: var(--success); }
+.tool-notice.err { border-color: var(--error); color: var(--error); }
+.tool-notice__close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.spin { animation: tc-rot 0.8s linear infinite; }
+@keyframes tc-rot { to { transform: rotate(360deg); } }

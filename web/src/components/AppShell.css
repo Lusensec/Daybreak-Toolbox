@@ -1,0 +1,359 @@
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  overflow: hidden;
+}
+
+/* ---- 顶部菜单栏 ---- */
+.menu-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  height: 48px;
+  flex: 0 0 auto;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.menu-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  line-height: 1.1;
+  flex: 0 0 auto;          /* 固定宽度，不被右侧菜单挤压 */
+  white-space: nowrap;     /* 品牌文案不换行 */
+  min-width: 0;
+}
+.menu-brand__logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  flex: 0 0 auto;
+  object-fit: cover;
+}
+.menu-title { font-size: 14px; font-weight: bold; color: var(--text); }
+.menu-subtitle { font-size: 11px; color: var(--muted); }
+
+.menu-nav {
+  display: flex;
+  flex-wrap: nowrap;          /* 单行横向，不换行 */
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;           /* 溢出时横向滚动（由滚轮驱动） */
+  overflow-y: hidden;
+  scrollbar-width: none;     /* Firefox：隐藏滑条 */
+}
+.menu-nav::-webkit-scrollbar { display: none; }  /* WebKit：隐藏滑条 */
+.nav-link {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;   /* 拖出脱离手势期间防文本选中干扰 */
+}
+.nav-link:hover { background: var(--heading-active); color: var(--text); }
+.nav-link.active { background: var(--accent-lo); color: var(--accent); font-weight: 600; }
+
+/* ---- 动态菜单（config.json 自定义菜单 → 导航下拉） ---- */
+.dynamic-menus {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  position: relative;
+}
+.dynamic-menus__sep {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  margin: 0 6px;
+  flex: 0 0 auto;
+}
+.dynamic-menu { position: relative; }
+.dynamic-menu__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--font-ui);
+}
+.dynamic-menu__btn:hover, .dynamic-menu__btn.open { background: var(--heading-active); color: var(--text); }
+.dynamic-menu__btn.active { background: var(--accent-lo); color: var(--accent); font-weight: 600; }
+/* 拖拽排序反馈：源项半透明，目标项左侧显示插入指示 */
+.dynamic-menu__btn[draggable="true"] { cursor: grab; }
+.dynamic-menu__btn:active { cursor: grabbing; }
+.dynamic-menu__btn.drop-target { background: var(--accent-lo); box-shadow: inset 2px 0 0 var(--accent); }
+.dynamic-menu__dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.dynamic-menu__caret { opacity: 0.5; }
+.dynamic-menu__drop {
+  min-width: 180px;
+  max-width: 300px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  padding: 4px;
+}
+/* portal 到 body：fixed 定位，逃出顶栏 overflow 容器（.menu-nav overflow-y:auto） */
+.dynamic-menu__drop--portal {
+  position: fixed;
+  z-index: 1100;
+  max-height: 320px;
+  overflow: auto;
+}
+/* 点外部关闭：透明遮罩（z 低于下拉 1100，高于普通内容） */
+.dynamic-menu__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1050;
+}
+.dynamic-menu__drop-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 6px 10px 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.dynamic-menu__drop-empty { font-size: 12px; color: var(--muted); padding: 8px 10px; }
+.dynamic-menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+.dynamic-menu__item:hover { background: var(--accent-lo); color: var(--accent); }
+
+/* ---- 导航栏行（菜单栏正下方，常驻第二行；主视图与子窗口画布同款，可横向滚动） ---- */
+.nav-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px;
+  min-height: 40px;
+  flex: 0 0 auto;
+  background: var(--heading-bg);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;           /* 单行横向，滚轮驱动（SSH 下拉 sticky 常驻左侧） */
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.nav-bar-row::-webkit-scrollbar { display: none; }
+.nav-bar-row__label {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 8px;
+  flex: 0 0 auto;
+}
+.nav-bar-row__btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--font-ui);
+}
+.nav-bar-row__btn:hover { background: var(--heading-active); color: var(--text); }
+.nav-bar-row__btn.active { background: var(--accent-lo); color: var(--accent); font-weight: 600; }
+.nav-bar-row__btn[draggable="true"] { cursor: grab; }
+.nav-bar-row__btn:active { cursor: grabbing; }
+.nav-bar-row__btn.drop-target { background: var(--accent-lo); box-shadow: inset 2px 0 0 var(--accent); }
+
+/* 主题循环切换（单按钮）：浅色 → 深色 → 跟随系统，图标展示当前主题 */
+.theme-toggle-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.theme-toggle-group .theme-toggle {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 30px;
+  border: none; border-radius: 0;
+  background: transparent;
+  color: var(--muted); cursor: pointer;
+}
+.theme-toggle-group .theme-toggle + .theme-toggle { border-left: 1px solid var(--border); }
+.theme-toggle-group .theme-toggle:hover { color: var(--text); background: var(--heading-active); }
+.theme-toggle-group .theme-toggle.active { background: var(--accent-lo); color: var(--accent); }
+.theme-toggle-group .theme-toggle.active + .theme-toggle { border-left: 1px solid var(--accent-lo); }
+
+/* 右侧操作区：工具箱设置 + 主题切换 */
+.menu-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---- 主内容区 ---- */
+.content {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 16px;
+}
+
+/* ---- 底部状态栏 ---- */
+.status-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 28px; flex: 0 0 auto;
+  padding: 0 16px;
+  background: var(--border);
+  font-size: 12px;
+}
+.status-text { color: var(--muted); }
+.status-badge { font-weight: 600; }
+.status-badge[data-state="offline"] { color: var(--error); }
+.status-badge[data-state="online"] { color: var(--success); }
+
+/* 通用卡片（面板容器） */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+/* 开发期桥接连接条 */
+.bridge-dock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 10px;
+  background: var(--panel);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+.bridge-dock label { font-size: 12px; color: var(--muted); }
+.bridge-dock input {
+  flex: 1 1 240px;
+  min-width: 200px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--entry-bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.bridge-dock button {
+  padding: 5px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bridge-dock button:disabled { opacity: 0.5; cursor: not-allowed; }
+.bridge-dock--offline { border-color: var(--error); border-style: solid; }
+.bridge-dock__msg { flex: 1 1 auto; font-size: 12px; color: var(--error); }
+
+/* 右键菜单（顶栏动态菜单栏 / 导航栏 / 子窗口导航行：重命名、删除）
+   z 需高于浮动子窗口（1000+层序）与设置模态框（1000），低于 toast/ghost（2000） */
+.ctx-backdrop { position: fixed; inset: 0; z-index: 1500; }
+.ctx-menu {
+  position: fixed;
+  z-index: 1501;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ctx-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.ctx-menu__item:hover { background: var(--heading-active); }
+.ctx-menu__item.danger { color: var(--error); }
+.ctx-menu__item.danger:hover { background: var(--error); color: #fff; }
+
+/* ---- 通用右下角拉伸把手（设置模态框 / 浮动子窗口共用；配套 hooks/useResize.ts） ---- */
+.resize-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  opacity: 0.5;
+  border-right: 2px solid var(--text);
+  border-bottom: 2px solid var(--text);
+  border-bottom-right-radius: 8px;
+  z-index: 6;
+  touch-action: none;
+}
+.resize-grip:hover,
+.resize-grip.is-resizing {
+  opacity: 1;
+  border-color: var(--accent);
+}
+/* 左下角把手（浮动子窗口）：右下角的镜像，nesw 光标 */
+.resize-grip.sw {
+  right: auto;
+  left: 0;
+  border-right: none;
+  border-left: 2px solid var(--text);
+  border-bottom-left-radius: 8px;
+  cursor: nesw-resize;
+}

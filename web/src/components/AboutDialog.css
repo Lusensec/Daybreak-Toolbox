@@ -1,0 +1,38 @@
+/* ===== 版本更新记录 ===== */
+.about-dialog {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+
+.about-title {
+  margin: 0 0 16px;
+  font-size: 16px;
+  color: var(--accent);
+}
+
+.about-block { padding: 0; }
+.about-version {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.about-list {
+  margin: 0;
+  padding-left: 18px;
+}
+.about-list li {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.7;
+}
+.about-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 14px 0;
+  width: 80%;
+}
+.about-msg { font-size: 13px; color: var(--muted); padding: 8px 0; }
+.about-msg.err { color: var(--error); }

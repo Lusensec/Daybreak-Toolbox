@@ -1,0 +1,101 @@
+/* 破晓·工具箱 —— 设计令牌（由 ui_theme.py 的 COLORS / DARK 转译）
+ * 浅色挂在 :root，深色挂在 [data-theme="dark"]。
+ * ThemeToggle 切换 document.documentElement.dataset.theme 即可全量生效。 */
+
+:root {
+  /* 基础 */
+  --bg: #f4f6f8;
+  --panel: #ffffff;
+  --border: #d9dde3;
+  --text: #202124;
+  --muted: #5f6368;
+
+  /* 强调色 */
+  --accent: #1a73e8;
+  --accent-hi: #2b86f5;
+  --accent-lo: #b6c5e0;
+
+  /* 语义 */
+  --success: #188038;
+  --warn: #f9ab00;
+  --error: #d93025;
+
+  /* 命令行（浅色主题：跟随面板白底，避免局部发黑） */
+  --console-bg: #ffffff;
+  --console-fg: #202124;
+  --cmd-fg: #1a73e8;
+  --out-fg: #202124;
+
+  /* 结构 */
+  --scroll: #cfd8dc;
+  --heading-bg: #e8eaed;
+  --heading-active: #dde2e8;
+
+  /* 笔记编辑器 */
+  --note-bg: #f4f6f8;
+  --note-fg: #202124;
+  --note-gutter-bg: #e8eaed;
+  --note-gutter-fg: #9aa0a6;
+  --note-line-hl: #d1e7ff;
+  --note-cursor: #1a73e8;
+  --note-sel: #a8d1ff;
+  --note-sel-fg: #000000;
+
+  /* 分屏子框着色 */
+  --tint-blue: #e8f0fe;
+  --tint-green: #e6f4ea;
+
+  /* 输入框 */
+  --entry-bg: #ffffff;
+
+  /* 字体 */
+  --font-ui: "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Consolas", ui-monospace, monospace;
+}
+
+[data-theme="dark"] {
+  --bg: #1e1f24;
+  --panel: #262830;
+  --border: #3a3d46;
+  --text: #e6e6e6;
+  --muted: #9aa0a6;
+
+  --accent: #4f9cf9;
+  --accent-hi: #6cb0ff;
+  --accent-lo: #33425a;
+
+  --success: #34a853;
+  --warn: #fdd663;
+  --error: #f28b82;
+
+  --console-bg: #14151a;
+  --console-fg: #e6e6e6;
+  --cmd-fg: #82d1ff;
+  --out-fg: #e6e6e6;
+
+  --scroll: #44474f;
+  --heading-bg: #31343d;
+  --heading-active: #3a3d46;
+
+  --note-bg: #1e1f24;
+  --note-fg: #e6e6e6;
+  --note-gutter-bg: #262830;
+  --note-gutter-fg: #9aa0a6;
+  --note-line-hl: #2a3a52;
+  --note-cursor: #4f9cf9;
+  --note-sel: #2a4a75;
+  --note-sel-fg: #ffffff;
+
+  --tint-blue: #263447;
+  --tint-green: #24382e;
+
+  --entry-bg: #1e1f24;
+}
+
+/* C2 控制台 tag → CSS 类（对应 ui_theme.apply_console 的 tag 定义） */
+.log-cmd     { color: var(--cmd-fg); }
+.log-error   { color: var(--error); }
+.log-success { color: var(--success); }
+.log-warn    { color: var(--warn); }
+.log-title   { color: var(--accent); font-weight: bold; }
+.log-info    { color: var(--text); }

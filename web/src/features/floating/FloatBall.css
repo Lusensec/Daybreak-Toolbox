@@ -1,0 +1,113 @@
+/* ===== 页面内悬浮球（主视图常驻；小球 + 快捷面板 + 收起圆点） ===== */
+.floatball { position: relative; z-index: 2100; pointer-events: none; }
+.floatball * { pointer-events: auto; }
+
+/* 小球：44px 圆形，直接放系统 logo（web/public/logo.png，自带透明圆底）；拖拽时放大阴影提示跟随 */
+.floatball__ball {
+  position: fixed;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+  overflow: hidden;
+}
+.floatball__logo {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.floatball__ball:hover { transform: scale(1.06); }
+.floatball__ball.is-dragging { cursor: grabbing; transform: scale(1.12); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.floatball__ball.is-open { transform: scale(1.08); }
+
+/* 收起态圆点：18px 半透明 logo，原位置；hover 放大提示可点 */
+.floatball__dot {
+  position: fixed;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  overflow: hidden;
+  opacity: 0.5;
+  cursor: pointer;
+  z-index: 2100;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.floatball__dot img { width: 100%; height: 100%; display: block; pointer-events: none; }
+.floatball__dot:hover { opacity: 1; transform: scale(1.25); }
+
+/* 面板：小球上方居中展开（data-below=1 时向下）；三组 + 脚注 */
+.floatball__panel {
+  position: fixed;
+  width: 260px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  transform: translate(-50%, calc(-100% - 14px));
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.14s ease;
+}
+.floatball__panel.is-open { opacity: 1; visibility: visible; }
+.floatball__panel[data-below="1"] { transform: translate(-50%, 14px); }
+.floatball__panel::-webkit-scrollbar { width: 6px; }
+.floatball__panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.floatball__group { padding: 4px 0; }
+.floatball__group + .floatball__group { border-top: 1px solid var(--border); }
+.floatball__gtitle {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 8px 6px;
+}
+.floatball__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+}
+.floatball__item:hover { background: var(--heading-active); }
+.floatball__item svg { flex: 0 0 auto; color: var(--muted); }
+.floatball__item small {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--muted);
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.floatball__badge { color: var(--accent) !important; margin-left: auto; flex: 0 0 auto; }
+.floatball__foot {
+  padding: 6px 8px 2px;
+  font-size: 10.5px;
+  color: var(--muted);
+  border-top: 1px dashed var(--border);
+  margin-top: 4px;
+}

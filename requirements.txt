@@ -1,7 +1,13 @@
 openai
+fastapi
+uvicorn[standard]
+websockets
 requests
 chardet
 pycryptodome
 beautifulsoup4
 dashscope
 zhipuai
+pystray
+pywebview
+Pillow

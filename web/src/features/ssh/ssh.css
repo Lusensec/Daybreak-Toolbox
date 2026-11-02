@@ -1,0 +1,118 @@
+/* ===== SSH 主机下拉框（终端管理页工具栏：路径芯片与终端类型之间；选中即连接） ===== */
+.ssh-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 26px;   /* 与 shell-bar 内其它控件（芯片/cmd 下拉）同高 */
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+}
+.ssh-select.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-lo);
+}
+.ssh-select.is-busy { opacity: 0.75; }
+
+/* 触发器（图标 + 当前目标 + 箭头，一体按钮） */
+.ssh-select__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.ssh-select__trigger:disabled { cursor: wait; }
+.ssh-select__label { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-select__chev { flex: 0 0 auto; color: var(--muted); transition: transform 0.12s ease; }
+.ssh-select__chev.is-open { transform: rotate(180deg); }
+.ssh-select.is-active .ssh-select__chev { color: var(--accent); }
+.ssh-select__spin { animation: ssh-spin 0.9s linear infinite; }
+@keyframes ssh-spin { to { transform: rotate(360deg); } }
+
+/* 断开按钮（已连接时） */
+.ssh-select__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ssh-select__close:hover { color: var(--error, #e5484d); background: var(--heading-active); }
+.ssh-select.is-active .ssh-select__close { color: var(--accent); }
+
+/* 弹层菜单 */
+.ssh-select__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 240px;
+  max-width: 320px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.ssh-select__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ssh-select__item:hover { background: var(--heading-active); }
+.ssh-select__item.is-on {
+  border-color: var(--accent);
+  background: var(--accent-lo);
+}
+.ssh-select__item-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+.ssh-select__item.is-on .ssh-select__item-main { color: var(--accent); }
+.ssh-select__item-sub {
+  padding-left: 19px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+.ssh-select__sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+.ssh-select__empty {
+  padding: 8px 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+  text-align: center;
+  font-family: var(--font-ui);
+}
