@@ -30,3 +30,8 @@ packaging/out/
 
 # Windows 保留名（MSYS2 误建）
 /nul
+
+# 本地 Release 打包产物
+packaging/*.zip
+Daybreak-Toolbox-*.zip
+daybreak.log
