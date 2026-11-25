@@ -16,10 +16,19 @@ PyInstaller **不能交叉编译**：macOS 包必须在 macOS 上构建、Linux 
 ```
 pnpm build            # 在 web/ 目录（或 pnpm --filter web build）
 python -m PyInstaller --onefile --noconsole --name DaybreakToolbox --noconfirm \
-    --exclude-module keyring --exclude-module pywebview \
+    --exclude-module keyring \
+    --collect-all pythonnet --collect-all clr_loader --hidden-import clr \
     --add-data "web/dist;dist" --add-data "config;config" \
+    --add-data "<site-packages>/webview/lib/Microsoft.Web.WebView2.Core.dll;." \
+    --add-data "<site-packages>/webview/lib/Microsoft.Web.WebView2.WinForms.dll;." \
+    --add-data "<site-packages>/webview/lib/WebBrowserInterop.x64.dll;." \
+    --add-data "<site-packages>/webview/lib/runtimes/win-x64/native/WebView2Loader.dll;." \
     run_bridge.py
 ```
+
+- 窗口模式（v2.0.3 起 exe 默认弹原生窗口）依赖 pywebview/pythonnet 与上述 WebView2 interop DLL（onefile 下必须平铺到打包根目录；
+  缺任一项时窗口不可用 → 自动降级「服务 + 默认浏览器」，其余功能不受影响）。
+- `<site-packages>` 用 `python -c "import webview,os;print(os.path.dirname(webview.__file__))"` 获取（CI 同款逻辑见 release.yml）。
 
 - 排除项说明：`keyring`/`pywebview` 为未使用依赖（分析阶段体积与风险）；如装有多余的
   ML 依赖（torch/transformers 等）建议一并 `--exclude-module`，避免分析阶段耗时过长。
@@ -29,5 +38,6 @@ python -m PyInstaller --onefile --noconsole --name DaybreakToolbox --noconfirm \
 
 - 首次启动在 **exe 同目录** 生成 `config/`（菜单配置 / 悬浮球位置 / 更新仓库配置）与 `daybreak.log`（诊断日志）。
 - 升级覆盖 exe 不会丢失 config/（已存在文件不覆盖）。
-- 启动后浏览器打开 http://127.0.0.1:8765/（端口被占用时自动 +1，日志中打印实际端口）。
+- 窗口形态（v2.0.3 起默认）：启动后弹出原生应用窗口即完整界面；关闭窗口 = 退出进程。
+- 服务模式（`--service` 参数或窗口引擎缺失时自动降级）：无常驻窗口，启动后自动打开默认浏览器访问 http://127.0.0.1:8765/（端口被占用时自动 +1，日志中打印实际端口）。
 - Windows 托盘右键「退出破晓工具箱」结束进程；悬浮球菜单「关闭小球」仅停球。

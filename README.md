@@ -55,16 +55,17 @@ python -m bridge.smoke
 
 | 平台 | 附件 | 说明 |
 | --- | --- | --- |
-| Windows | `Daybreak-Toolbox-<版本>-win-x64.zip` | 解压后运行 `DaybreakToolbox.exe`（托盘常驻 + 桌面悬浮球） |
-| macOS | `Daybreak-Toolbox-<版本>-mac-arm64.zip` / `mac-x64.zip` | 双击 `DaybreakToolbox.app`；首次 右键→打开 绕过 Gatekeeper |
-| Linux | `Daybreak-Toolbox-<版本>-linux-x64.zip` | 解压后运行 `./DaybreakToolbox`（需系统含 GTK 运行库；悬浮球/托盘仅 Windows 生效） |
+| Windows | `Daybreak-Toolbox-<版本>-win-x64.zip` | 解压后运行 `DaybreakToolbox.exe`：**直接弹出原生应用窗口**（v2.0.3 起，WebView2 渲染；托盘常驻 + 桌面悬浮球共存） |
+| macOS | `Daybreak-Toolbox-<版本>-mac-arm64.zip` / `mac-x64.zip` | 双击 `DaybreakToolbox.app`；首次 右键→打开 绕过 Gatekeeper（窗口形态依赖系统 WebView；缺失时自动降级浏览器） |
+| Linux | `Daybreak-Toolbox-<版本>-linux-x64.zip` | 解压后运行 `./DaybreakToolbox`（需系统含 GTK/WebKit 运行库；无窗口引擎时降级浏览器形态；悬浮球/托盘仅 Windows 生效） |
 
 行为说明：
 
 - 程序首次启动会在 **exe 同目录** 生成 `config/`（菜单配置 / 悬浮球位置 / 更新仓库配置）；升级时已有配置不会被覆盖。
-- 启动后同样打开 **http://127.0.0.1:8765/**（端口被占用时自动 +1，启动日志打印实际端口；打包版启动后**自动弹出默认浏览器**，未弹出时手动访问该地址即可）。
+- **窗口形态（v2.0.3 起默认）**：exe 启动后弹出应用窗口即完整界面（与浏览器同款 UI）；关闭窗口 = 退出进程（托盘「退出破晓工具箱」同义）。
+- **服务模式**：加参数 `DaybreakToolbox.exe --service`（或窗口引擎不可用时自动降级）→ 无常驻窗口，启动约 1 秒后自动打开默认浏览器访问 **http://127.0.0.1:8765/**（端口被占用时自动 +1，`daybreak.log` 打印实际端口）。
 - Windows：托盘图标右键 →「退出破晓工具箱」结束进程；悬浮球菜单「关闭小球」仅停球不停服务。
-- 「设置 → 更新 → 检查更新」对比 GitHub 仓库 latest Release 与本地版本。
+- 「设置 → 更新检查」对比 GitHub 仓库 latest Release 与本地版本。
 
 
 输出 `SMOKE_OK` 即全链路正常。端口被占用时自动 8765 → 8770 顺延探测。
@@ -170,6 +171,12 @@ Base64 / URL / Unicode / JSON / MD5 / 乱码恢复。
 - 工具箱本身是学习研究工具，请仅对你有权限的系统使用
 
 # 七、更新记录
+
+## v2.0.3
+
+1、新增窗口形态（Windows 打包默认）：双击 exe 直接弹出原生应用窗口（WebView2 渲染，与浏览器界面同款），关闭窗口即退出；托盘 / 悬浮球与窗口共存
+2、`--service` 参数（或窗口引擎不可用时）回退旧形态：常驻服务 + 自动打开默认浏览器，行为同 v2.0.2
+3、Windows 包内置 pywebview / pythonnet / WebView2 interop DLL；macOS / Linux 包窗口引擎缺失时自动降级浏览器形态
 
 ## v2.0.2
 

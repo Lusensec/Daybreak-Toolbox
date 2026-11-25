@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import sys
 import threading
@@ -582,7 +583,7 @@ def build_app() -> FastAPI:
         _ball.set_state_hook(lambda state: _thread_broadcast("ball.state", state))
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.2", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.3", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -693,13 +694,80 @@ def run_blocking(port: Optional[int] = None) -> None:
     server.run()  # 阻塞
 
 
-def main() -> None:
-    """python -m bridge.main —— 直接启动（前台）。
-    线程模型：uvicorn 后台线程 + 托盘 daemon 线程 + （可用时）主线程跑原生悬浮球 GUI 循环。"""
+def pick_mode(argv: "list[str]") -> str:
+    """入口形态（纯函数，可测试）：
+    - 打包态（frozen）：默认 "windowed"（pywebview 原生窗口，方案 A）；带 --service 参数 → "service"（服务 + 浏览器旧形态）
+    - 开发态（python -m bridge.main）："service"（不弹窗口，避免打扰开发）"""
+    if getattr(sys, "frozen", False) and "--service" not in argv:
+        return "windowed"
+    return "service"
+
+
+def run_windowed(port: Optional[int] = None) -> None:
+    """打包窗口模式（方案 A）：主线程跑 pywebview 原生窗口（Windows=WebView2 / macOS=WKWebView /
+    Linux=WebKitGTK），加载同源桥接 UI；uvicorn / 悬浮球 / 托盘均为 daemon 后台线程。
+
+    - 关闭窗口 → 退出全进程（与托盘「退出破晓工具箱」同语义；想服务常驻请用 --service）
+    - 窗口引擎不可用（无 WebView2 / 无显示环境等）→ 降级「服务 + 默认浏览器」并保持进程存活
+    """
     global _current_port
     import threading as _threading
 
     from .menu_service import project_root as _project_root
+
+    port = port or find_free_port()
+    _current_port = port
+    app = build_app()
+    _register_builtin_commands()
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    srv = _threading.Thread(target=server.run, name="bridge-uvicorn", daemon=True)
+    srv.start()
+    for _ in range(100):
+        if server.should_exit or server.started:
+            break
+        srv.join(0.1)
+    url = f"http://127.0.0.1:{port}/"
+    print(f"[bridge] listening on 127.0.0.1:{port} (windowed)")
+    print(f"[bridge] token: {_token_mod.get_token()}")
+
+    _pr = _project_root()
+    ball_ok = _ball.start_ball(port, _pr)
+    start_tray(port, extra_items=_ball.tray_items() if ball_ok else None, root=_pr)
+
+    try:
+        import webview
+        webview.create_window("破晓·工具箱", url, width=1280, height=800,
+                              resizable=True, min_size=(960, 600))
+        webview.start()  # 阻塞：主线程窗口消息循环；窗口关闭后返回
+    except Exception as e:
+        print(f"[bridge] 窗口模式不可用（{type(e).__name__}: {e}）；降级服务模式，用默认浏览器打开界面")
+        try:
+            import webbrowser
+            _threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+        except Exception:
+            pass
+        _threading.Event().wait()  # 服务模式：保持进程存活（uvicorn/托盘/球为 daemon 线程）
+        return
+
+    # 窗口关闭 → 退出全进程（与托盘「退出」同语义）
+    _ball.stop_ball()
+    print("[bridge] 窗口已关闭，退出进程（想服务常驻请用 --service 参数启动）")
+    os._exit(0)
+
+
+def main() -> None:
+    """python -m bridge.main —— 直接启动（前台）。
+    线程模型：uvicorn 后台线程 + 托盘 daemon 线程 + （可用时）主线程跑原生悬浮球 GUI 循环。
+    打包态默认走窗口模式（run_windowed）；--service / 开发态走本路径。"""
+    global _current_port
+    import threading as _threading
+
+    from .menu_service import project_root as _project_root
+
+    if pick_mode(sys.argv[1:]) == "windowed":
+        run_windowed()
+        return
 
     port = find_free_port()
     _current_port = port

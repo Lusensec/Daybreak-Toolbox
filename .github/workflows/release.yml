@@ -64,12 +64,25 @@ jobs:
         shell: bash
         run: |
           sep="${{ matrix.add-data-sep }}"
+          # 窗口模式（方案 A，pywebview）：pythonnet/.NET 运行时全平台收集；
+          # Windows WebView2 interop DLL 仅存在于 win wheel，onefile 需平铺到 _MEIPASS 根目录
+          extra_flags=""
+          webview_lib=$(python -c "import webview,os;print(os.path.dirname(webview.__file__))" 2>/dev/null || true)
+          if [ -n "$webview_lib" ] && [ -f "$webview_lib/lib/Microsoft.Web.WebView2.Core.dll" ]; then
+            extra_flags="$extra_flags --add-data $webview_lib/lib/Microsoft.Web.WebView2.Core.dll${sep}."
+            extra_flags="$extra_flags --add-data $webview_lib/lib/Microsoft.Web.WebView2.WinForms.dll${sep}."
+            extra_flags="$extra_flags --add-data $webview_lib/lib/WebBrowserInterop.x64.dll${sep}."
+            extra_flags="$extra_flags --add-data $webview_lib/lib/runtimes/win-x64/native/WebView2Loader.dll${sep}."
+            extra_flags="$extra_flags --add-data $webview_lib/lib/runtimes/win-x64${sep}win-x64"
+          fi
           pyinstaller --name DaybreakToolbox --clean --noconfirm \
-            --exclude-module keyring --exclude-module pywebview \
+            --exclude-module keyring \
             --exclude-module transformers --exclude-module torch \
             --exclude-module torchvision --exclude-module torchaudio \
             --exclude-module datasets --exclude-module tokenizers \
+            --collect-all pythonnet --collect-all clr_loader --hidden-import clr \
             --add-data "web/dist${sep}dist" --add-data "config${sep}config" \
+            $extra_flags \
             ${{ matrix.pyinstaller }} run_bridge.py
           echo "build done: $(ls dist | head -5 | tr '\n' ' ')"
 

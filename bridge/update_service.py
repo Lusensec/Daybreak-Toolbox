@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.3"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,12 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.3":
+"""
+1、新增窗口形态（Windows 打包默认）：双击 exe 直接弹出原生应用窗口（WebView2 渲染，与浏览器界面同款），关闭窗口即退出；托盘 / 悬浮球与窗口共存
+2、--service 参数（或窗口引擎不可用时）回退旧形态：常驻服务 + 自动打开默认浏览器，行为同 v2.0.2
+3、Windows 包内置 pywebview / pythonnet / WebView2 interop DLL；macOS / Linux 包窗口引擎缺失时自动降级浏览器形态
+""",
     "v2.0.2":
 """
 1、修复打包版启动后不自动打开浏览器：exe 启动约 1 秒后自动用默认浏览器打开界面地址（开发态不受影响；失败时日志打印手动地址）
