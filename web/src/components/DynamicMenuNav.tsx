@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router";
-import { Pencil, Trash2, Eye } from "lucide-react";
+import { Pencil, Plus, Trash2, Eye } from "lucide-react";
 import { useMenuStore } from "../features/menu/store";
 import { sendCommand } from "../services/ws";
 import { useToastStore } from "./toast";
+import { useSettingsModal } from "../store/settingsModal";
+import { promptOpen } from "./PromptDialog";
 import { useWheelScrollHorizontal } from "../hooks/useWheelScroll";
 import { useDetachStore } from "../features/floating/detachStore";
 import { useDetachDrag } from "../features/floating/useDetachDrag";
@@ -22,7 +24,7 @@ export interface CtxState {
 
 export interface CtxItem {
   label: string;
-  icon?: "pencil" | "trash" | "eye";
+  icon?: "pencil" | "plus" | "trash" | "eye";
   danger?: boolean;
   run: () => void | Promise<void>;
 }
@@ -50,7 +52,7 @@ export function CtxMenu({ state, items, onClose }: { state: CtxState; items: Ctx
               void Promise.resolve(it.run()).finally(onClose);
             }}
           >
-            {it.icon === "pencil" ? <Pencil size={13} /> : it.icon === "trash" ? <Trash2 size={13} /> : it.icon === "eye" ? <Eye size={13} /> : null}
+            {it.icon === "pencil" ? <Pencil size={13} /> : it.icon === "plus" ? <Plus size={13} /> : it.icon === "trash" ? <Trash2 size={13} /> : it.icon === "eye" ? <Eye size={13} /> : null}
             {it.label}
           </button>
         ))}
@@ -59,7 +61,8 @@ export function CtxMenu({ state, items, onClose }: { state: CtxState; items: Ctx
   );
 }
 
-/** 生成「重命名 + 删除」两项（菜单 / 导航共用，错误走全局 toast，menu.changed 自动刷新列表；
+/** 生成「重命名 + 添加菜单栏 + 删除」三项（菜单 / 导航共用；重命名走全局 PromptDialog，
+ *  添加菜单栏 → 工具箱设置「菜单栏管理」页；错误走全局 toast，menu.changed 自动刷新列表；
  * 子窗口导航行也复用，navigate 传主路由 —— 仅当主视图正停在该导航时路由跟随改名） */
 export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigate: (p: string) => void }): CtxItem[] {
   // 非组件上下文：直接读 toast store（useToast 是 hook，不能在此调用）
@@ -74,10 +77,9 @@ export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigat
       {
         label: "重命名", icon: "pencil",
         run: async () => {
-          const nn = window.prompt(`重命名菜单栏「${m}」（勿用空格与特殊字符）`, m);
+          const nn = await promptOpen(`重命名菜单栏「${m}」`, m);
           if (nn === null) return;
-          const name = nn.trim();
-          if (!name || name === m) return;
+          const name = nn;
           try {
             await sendCommand("menu.rename", { name: m, new_name: name });
             // 若正在该菜单下 → 顶栏/路由同步跟到改名后（store 由 menu.changed 自动刷新）
@@ -88,6 +90,13 @@ export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigat
             }
             toast.ok(`菜单栏已重命名为「${name}」`);
           } catch (e) { err(e); }
+        },
+      },
+      {
+        label: "添加菜单栏", icon: "plus",
+        run: () => {
+          // 打开工具箱设置并定位到「菜单栏管理」页（新增菜单栏行常显）
+          useSettingsModal.getState().openModal({ tab: "menus" });
         },
       },
       {
@@ -108,10 +117,9 @@ export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigat
     {
       label: "重命名", icon: "pencil",
       run: async () => {
-        const nn = window.prompt(`重命名导航栏「${n}」（勿用空格与特殊字符）`, n);
+        const nn = await promptOpen(`重命名导航栏「${n}」（菜单「${menuName}」）`, n);
         if (nn === null) return;
-        const name = nn.trim();
-        if (!name || name === n) return;
+        const name = nn;
         try {
           await sendCommand("menu.rename_nav", { menu: menuName, nav: n, new_name: name });
           // 若路由正停在该导航 → 跟到改名后的导航（页面名同步）
@@ -122,6 +130,12 @@ export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigat
           }
           toast.ok(`导航栏已重命名为「${name}」`);
         } catch (e) { err(e); }
+      },
+    },
+    {
+      label: "添加菜单栏", icon: "plus",
+      run: () => {
+        useSettingsModal.getState().openModal({ tab: "menus" });
       },
     },
     {

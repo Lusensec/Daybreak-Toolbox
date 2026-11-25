@@ -154,6 +154,24 @@ _VK_LBUTTON, _VK_RBUTTON = 0x0001, 0x0002
 _gdi_le.CreateDIBSection.argtypes = _gdi32.CreateDIBSection.argtypes
 _gdi_le.CreateDIBSection.restype = _gdi32.CreateDIBSection.restype
 
+# ---- 每显示器 DPI / 工作区（Win10 1607+；旧系统调用抛异常 → 返回 0 优雅降级）----
+class _MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.UINT),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.UINT),
+        ("szDevice", ctypes.c_wchar * 32),
+    ]
+
+
+_user32.GetDpiForWindow.argtypes = [_H]
+_user32.GetDpiForWindow.restype = ctypes.c_uint
+_user32.MonitorFromPoint.argtypes = [wintypes.POINT, ctypes.c_uint]
+_user32.MonitorFromPoint.restype = _H
+_user32.GetMonitorInfoW.argtypes = [_H, ctypes.POINTER(_MONITORINFOEXW)]
+_user32.GetMonitorInfoW.restype = wintypes.BOOL
+
 _WM_PAINT, _WM_DESTROY = 0x000F, 0x0002
 _WM_MOUSEMOVE, _WM_LBUTTONDOWN, _WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
 _WM_RBUTTONUP, _WM_CONTEXTMENU = 0x0205, 0x007B
@@ -343,6 +361,30 @@ def _work_area() -> tuple[int, int, int, int]:
     if _user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rc), 0):
         return rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top
     return 0, 0, _user32.GetSystemMetrics(0), _user32.GetSystemMetrics(1)
+
+
+def _window_dpi(hwnd) -> int:
+    """窗口所在显示器的实际 DPI（PMAV2；Win10 1607+）。不可用返回 0。"""
+    try:
+        return int(_user32.GetDpiForWindow(hwnd))
+    except Exception:
+        return 0
+
+
+def _work_area_at(x: int, y: int) -> tuple[int, int, int, int]:
+    """光标所在显示器的工作区（物理像素）；失败回退主屏工作区。
+    跨屏拖拽钳制用：旧实现只用主屏工作区，球拖不出主屏边界。"""
+    try:
+        hmon = _user32.MonitorFromPoint(wintypes.POINT(x, y), 2)  # MONITOR_DEFAULTTONEAREST
+        mi = _MONITORINFOEXW()
+        mi.cbSize = ctypes.sizeof(mi)
+        if _user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            l, t, r, b = mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom
+            if r > l and b > t:
+                return l, t, r - l, b - t
+    except Exception:
+        pass
+    return _work_area()
 
 
 def _menu_texts(st: dict, panel_top: int, s: float) -> list[tuple[str, int, int]]:
@@ -728,6 +770,17 @@ class _NativeBall:
                 return
             _user32.DestroyWindow(self.hwnd)
 
+        # DPI 校正：窗口所在显示器的实际 DPI 可能与创建时用的 scale 不符（scale 在线程
+        # 启动时用 GetDpiForSystem 计算，取到的是系统 DPI，而非球实际所在显示器的 DPI；
+        # 多屏 125%/150% 混布时尺寸会系统性偏小）。尺寸不符的窗口在系统后续 DPI 相关
+        # 自动 resize 时会把旧提交表面非比例拉伸 → 球变椭圆。不符立即重建（新代际 =
+        # 新尺寸 + 新表面提交）。
+        win_dpi = _window_dpi(self.hwnd)
+        if win_dpi and abs(win_dpi / 96.0 - s) > 0.01:
+            log.warning("ball dpi mismatch: scale %.2f but window dpi %d; recreating", s, win_dpi)
+            st["scale"] = win_dpi / 96.0
+            _user32.DestroyWindow(self.hwnd)  # WM_DESTROY → PostQuitMessage → run() 重建
+
 
     def _open_menu(self) -> None:
         import time as _t
@@ -772,6 +825,25 @@ class _NativeBall:
     def _poll_input(self) -> None:
         """50ms 轮询鼠标：拖拽 / 右键开关菜单 / 单击开浏览器。"""
         st = self.st
+        # 尺寸守护（兜底）：任何外部 resize（系统 DPI 自动 resize、DWM 行为等）都会让
+        # 已提交表面 与 窗口尺寸 脱节 → DWM 拉伸 → 球变椭圆。检测即重建（限频 0.5s）。
+        rc_g = wintypes.RECT()
+        if _user32.GetWindowRect(self.hwnd, ctypes.byref(rc_g)):
+            s2 = st["scale"]
+            dpi2 = _window_dpi(self.hwnd)
+            if dpi2:
+                s2 = dpi2 / 96.0
+                st["scale"] = s2
+            ew = int(_MW * s2)
+            eh = int((_OPEN_H if self.menu_open else _CLOSED_H) * s2)
+            if (rc_g.right - rc_g.left, rc_g.bottom - rc_g.top) != (ew, eh):
+                now_g = time.time()
+                if now_g - getattr(self, "_guard_recreate_t", 0) >= 0.5:
+                    self._guard_recreate_t = now_g
+                    log.warning("ball size drift %dx%d (expect %dx%d @scale %.2f); recreating",
+                                rc_g.right - rc_g.left, rc_g.bottom - rc_g.top, ew, eh, s2)
+                    self._menu_recreate()
+                    return
         pos = wintypes.POINT()
         if not _user32.GetCursorPos(ctypes.byref(pos)):
             return
@@ -811,7 +883,7 @@ class _NativeBall:
                 if abs(dx) + abs(dy) > 4:
                     self.moved = True
                     nx, ny = self.drag_ox + dx, self.drag_oy + dy
-                    wl, wt, ww, wh = _work_area()
+                    wl, wt, ww, wh = _work_area_at(pos.x, pos.y)  # 光标所在显示器工作区（跨屏拖拽）
                     s2 = st["scale"]
                     nx = min(max(wl, nx), wl + ww - int(_BALLDX * s2))
                     ny = min(max(wt, ny), wt + wh - int(_CLOSED_H * s2))
@@ -927,6 +999,15 @@ class _NativeBall:
         if msg == _WM_RECREATE:
             _GEN_BAD_STREAK = 0
             _user32.DestroyWindow(hwnd)  # run() 循环重建（新窗口新一次表面提交）
+            return 0
+        if msg == 0x02E0:  # WM_DPICHANGED：跨显示器 / 系统缩放变更
+            # wParam 低 16 位 = 新 DPI。必须自行处理：默认 DefWindowProc 会按新 DPI 自动
+            # resize 窗口，而已提交的 32 位表面会被 DWM 拉伸到新尺寸 → 球变椭圆。
+            # 处理 = 按新 DPI 重建窗口（新尺寸 + 新表面提交）。
+            new_dpi = w & 0xFFFF
+            if new_dpi:
+                st["scale"] = new_dpi / 96.0
+                self._menu_recreate()
             return 0
         if msg == _WM_DESTROY:
             self._release_gdi()

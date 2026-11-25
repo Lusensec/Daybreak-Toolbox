@@ -1,0 +1,78 @@
+/* 全局重命名对话框：居中模态（遮罩 + 面板），主题变量随深/浅色自动切换 */
+.prompt-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 3000; /* 高于设置模态(1000)/子窗口(2000+)/悬浮球(2100)：重命名随时可弹 */
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.prompt-dialog {
+  width: min(420px, calc(100vw - 32px));
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #d5dbe5);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  padding: 14px 16px 12px;
+  color: var(--text, #1e2633);
+}
+.prompt-dialog__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.prompt-dialog__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted, #6b7686);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.prompt-dialog__close:hover { background: var(--panel2, rgba(0, 0, 0, 0.06)); color: var(--text, #1e2633); }
+.prompt-dialog__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text, #1e2633);
+  background: var(--bg, #f5f7fa);
+  border: 1px solid var(--border, #d5dbe5);
+  border-radius: 8px;
+  outline: none;
+}
+.prompt-dialog__input:focus { border-color: var(--accent, #4da3ff); }
+.prompt-dialog__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+.prompt-dialog__hint { font-size: 11px; color: var(--muted, #6b7686); }
+.prompt-dialog__btns { display: flex; gap: 8px; }
+.prompt-dialog__btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  border: 1px solid var(--border, #d5dbe5);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text, #1e2633);
+  cursor: pointer;
+}
+.prompt-dialog__btn.primary {
+  background: var(--accent, #4da3ff);
+  border-color: var(--accent, #4da3ff);
+  color: #fff;
+}
+.prompt-dialog__btn.primary:hover { filter: brightness(1.08); }

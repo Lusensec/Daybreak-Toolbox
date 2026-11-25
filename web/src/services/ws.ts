@@ -108,8 +108,10 @@ function waitForOnline(timeoutMs: number = WAIT_CONNECT_MS): Promise<void> {
   });
 }
 
-/** 发送命令并等待 ack/err（Promise 封装）。WS 未就绪时会先等待桥接上线再发送。 */
-export async function sendCommand(type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+/** 发送命令并等待 ack/err（Promise 封装）。WS 未就绪时会先等待桥接上线再发送。
+ *  timeoutMs：等待 ack 的超时（默认 15s）。长命令（shell.run/ssh.run 后端最长
+ *  60s + 重试预算）需传更大值，否则前端先于后端超时 → 误报「cmd xxx timeout」。 */
+export async function sendCommand(type: string, payload: Record<string, unknown> = {}, timeoutMs: number = 15000): Promise<Record<string, unknown>> {
   await waitForOnline();
   return new Promise((resolve, reject) => {
     if (!isWsReady()) {
@@ -117,7 +119,7 @@ export async function sendCommand(type: string, payload: Record<string, unknown>
       return;
     }
     const id = crypto.randomUUID();
-    const timer = setTimeout(() => reject(new Error(`cmd ${type} timeout`)), 15000);
+    const timer = setTimeout(() => reject(new Error(`cmd ${type} timeout`)), Math.max(1000, timeoutMs));
     const onMsg = (ev: MessageEvent) => {
       try {
         const msg = JSON.parse(ev.data as string) as { id?: string; type?: string; payload?: unknown };

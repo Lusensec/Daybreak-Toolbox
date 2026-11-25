@@ -37,6 +37,11 @@ class WsBus:
     token: str = ""
     _handlers: Dict[str, Any] = field(default_factory=dict)  # type -> async handler
     _clients: Dict[WebSocket, bool] = field(default_factory=dict)  # ws -> authenticated
+    # 每连接 handler FIFO：接收循环只做「读帧 + 校验 + 入队」，handler 由 worker 任务
+    # 按到达顺序串行执行。慢命令（shell.run/ssh.run 最长 60s+、dialog 分钟级）不再阻塞
+    # 读帧，后续命令即时被处理，避免「前一条慢 → 后面命令假超时」的堆积。
+    _queues: Dict[WebSocket, "asyncio.Queue"] = field(default_factory=dict)
+    _workers: Dict[WebSocket, "asyncio.Task"] = field(default_factory=dict)
 
     # ---- 命令注册 ----
     def register(self, type_name: str, handler) -> None:
@@ -77,13 +82,42 @@ class WsBus:
         if handler is None:
             await self._reply(ws, req_id, "err", {"code": E_NOT_FOUND, "message": f"unknown type {mtype}"})
             return
-        try:
-            result = await handler(payload, ws)
-            await self._reply(ws, req_id, "ack", result if isinstance(result, dict) else {})
-        except BridgeError as e:
-            await self._reply(ws, req_id, "err", {"code": e.code, "message": e.message})
-        except Exception as e:  # noqa: BLE001
-            await self._reply(ws, req_id, "err", {"code": E_INTERNAL, "message": str(e)})
+        # 入队派发：handler 执行与接收循环解耦（同连接按到达顺序串行，语义与旧内联版一致）
+        self.dispatch(ws, req_id, handler, payload)
+
+    # ---- 每连接 FIFO 派发（慢 handler 不阻塞读帧） ----
+    def dispatch(self, ws: WebSocket, req_id: Optional[str], handler, payload: dict) -> None:
+        q = self._queues.get(ws)
+        if q is None:
+            q = asyncio.Queue()
+            self._queues[ws] = q
+        q.put_nowait((req_id, handler, payload))
+        w = self._workers.get(ws)
+        if w is None or w.done():
+            # 队列空时 worker 已自行退出 → 起新任务；同一连接任一时刻至多一个 worker
+            self._workers[ws] = asyncio.create_task(self._worker(ws))
+
+    async def _worker(self, ws: WebSocket) -> None:
+        q = self._queues[ws]
+        while True:
+            try:
+                req_id, handler, payload = q.get_nowait()
+            except asyncio.QueueEmpty:
+                return  # 队列排空：任务退出，下一条 dispatch 再拉起（保持串行）
+            try:
+                result = await handler(payload, ws)
+                await self._reply(ws, req_id, "ack", result if isinstance(result, dict) else {})
+            except BridgeError as e:
+                await self._reply(ws, req_id, "err", {"code": e.code, "message": e.message})
+            except Exception as e:  # noqa: BLE001
+                await self._reply(ws, req_id, "err", {"code": E_INTERNAL, "message": str(e)})
+
+    def detach(self, ws: WebSocket) -> None:
+        """连接关闭：停止该连接的 worker（在途 handler 随任务取消；底层线程自行收尾）。"""
+        w = self._workers.pop(ws, None)
+        if w is not None and not w.done():
+            w.cancel()
+        self._queues.pop(ws, None)
 
     async def _reply(self, ws: WebSocket, req_id: Optional[str], mtype: str, payload: dict) -> None:
         frame: Dict[str, Any] = {"v": 1, "type": mtype, "payload": payload}

@@ -16,6 +16,7 @@
   width: 960px;
   height: 580px;
   flex: 0 0 auto;
+  position: relative;   /* 定位上下文：右下角拉伸把手（.resize-grip）锚定面板角而非 mask 角 */
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -56,6 +57,31 @@
   cursor: pointer;
 }
 .settings-modal__close:hover { color: var(--text); border-color: var(--accent); }
+
+/* 标题栏右上按钮组（全屏 + 关闭并排） */
+.settings-modal__head-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+/* 全屏按钮（⛶）：样式同关闭按钮，排在它左侧 */
+.settings-modal__full {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+.settings-modal__full:hover { color: var(--accent); border-color: var(--accent); }
+
+/* 全屏态：铺满视口，直角贴近「窗口最大化」观感（100vw×100vh 自动跟随窗口 resize） */
+.settings-modal.is-fs { border-radius: 0; }
 
 .settings-modal__body {
   display: flex;
@@ -336,6 +362,50 @@
 .tool-item__del:hover:not(:disabled) { color: var(--error); border-color: var(--error); }
 .menu-item__del:disabled,
 .tool-item__del:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* 菜单栏管理 / 导航栏管理 页的列表行（行点击选中；右侧 ✎改名 / 🗑删除 小按钮） */
+.mgmt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.mgmt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+.mgmt-row:hover { border-color: var(--accent, #4da3ff); }
+.mgmt-row.is-active {
+  border-color: var(--accent, #4da3ff);
+  box-shadow: inset 0 0 0 1px var(--accent, #4da3ff);
+}
+.mgmt-row__dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+.mgmt-row__name { font-weight: 600; color: var(--text); flex: 0 0 auto; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mgmt-row__meta { flex: 1 1 auto; font-size: 12px; color: var(--muted); }
+.mgmt-row__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.mgmt-row__btn:hover:not(:disabled) { color: var(--accent, #4da3ff); border-color: var(--accent, #4da3ff); }
+.mgmt-row__btn:last-child:hover:not(:disabled) { color: var(--error); border-color: var(--error); }
+.mgmt-row__btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .form-row {
   display: flex;

@@ -20,6 +20,8 @@ import json
 import os
 import re
 import secrets
+import tempfile
+import threading
 from pathlib import Path
 
 # 项目根目录（bridge/ 的同级）
@@ -29,12 +31,24 @@ _LEGACY_TOKEN_FILE = _PROJECT_ROOT / "config" / "bridge_token.json"
 _LEGACY_BAIDU_PY = _PROJECT_ROOT / "config" / "baidu.py"
 
 _TOKEN = {"value": ""}
+# 密钥文件读改写锁：跨连接并发（translate.get_creds / set_creds 等 handler + 翻译 worker）
+# 下保证「读-改-写」不互相吃到写了一半的文件
+_IO_LOCK = threading.Lock()
 
 
 def _write_secrets(data: dict) -> None:
+    """原子写（临时文件 + os.replace，与 shortcut/ssh/menu 配置同款）：
+    崩溃/并发不会留下截断的 JSON（截断 → token 误判丢失重新生成 → 全客户端 401 重连）。"""
     _SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _SECRETS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                             encoding="utf-8")
+    fd, tmp = tempfile.mkstemp(dir=str(_SECRETS_FILE.parent), prefix=".secrets_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _SECRETS_FILE)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
     try:
         os.chmod(_SECRETS_FILE, 0o600)
     except OSError:
@@ -91,17 +105,18 @@ def get_token() -> str:
     if _TOKEN["value"]:
         return _TOKEN["value"]
 
-    data = _read_secrets()
-    had_token = bool(str(data.get("token", "")).strip())
-    data = _migrate_legacy(data)
-    token = str(data.get("token", "")).strip()
-    if not token:
-        token = secrets.token_hex(32)
-        data["token"] = token
-    # 旧文件内容（token / baidu）已并入内存但未落盘 → 持久化；token 已存在且 baidu 齐则不重写
-    if not had_token or not data.get("baidu"):
-        _write_secrets(data)
-    _TOKEN["value"] = token
+    with _IO_LOCK:
+        data = _read_secrets()
+        had_token = bool(str(data.get("token", "")).strip())
+        data = _migrate_legacy(data)
+        token = str(data.get("token", "")).strip()
+        if not token:
+            token = secrets.token_hex(32)
+            data["token"] = token
+        # 旧文件内容（token / baidu）已并入内存但未落盘 → 持久化；token 已存在且 baidu 齐则不重写
+        if not had_token or not data.get("baidu"):
+            _write_secrets(data)
+        _TOKEN["value"] = token
     return token
 
 
@@ -117,21 +132,23 @@ def validate(token: str | None) -> bool:
 
 def get_baidu() -> dict:
     """返回 baidu 凭证 {app_id, secret_key}（未配置返回空 dict；惰性迁移旧 baidu.py）。"""
-    data = _read_secrets()
-    if not data.get("baidu") and _parse_legacy_baidu_py():
-        data = _migrate_legacy(data)  # 并入旧 baidu 凭证，保留文件已有的 token
-        _write_secrets(data)
-    b = data.get("baidu") or {}
-    return {"app_id": str(b.get("app_id", "")).strip(),
-            "secret_key": str(b.get("secret_key", "")).strip()}
+    with _IO_LOCK:
+        data = _read_secrets()
+        if not data.get("baidu") and _parse_legacy_baidu_py():
+            data = _migrate_legacy(data)  # 并入旧 baidu 凭证，保留文件已有的 token
+            _write_secrets(data)
+        b = data.get("baidu") or {}
+        return {"app_id": str(b.get("app_id", "")).strip(),
+                "secret_key": str(b.get("secret_key", "")).strip()}
 
 
 def set_baidu(app_id: str, secret_key: str) -> dict:
     """写入/更新 baidu 凭证（保留 token 字段；空值允许=清除该项）。"""
     get_token()  # 确保统一文件已建立（含 token 与旧文件迁移）
-    data = _read_secrets()
-    data["baidu"] = {"app_id": (app_id or "").strip(),
-                     "secret_key": (secret_key or "").strip()}
-    _write_secrets(data)
+    with _IO_LOCK:
+        data = _read_secrets()
+        data["baidu"] = {"app_id": (app_id or "").strip(),
+                          "secret_key": (secret_key or "").strip()}
+        _write_secrets(data)
     return {"ok": True, "app_id": data["baidu"]["app_id"],
             "secret_key_configured": bool(data["baidu"]["secret_key"])}

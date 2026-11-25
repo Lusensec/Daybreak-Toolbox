@@ -7,6 +7,9 @@
   position: fixed;
   width: 44px;
   height: 44px;
+  /* <button> 的 UA 默认 padding（Chrome 1px 6px）会把内容盒缩成 32×42，
+     logo（100%×100%）被拉成纵椭圆——必须清零 */
+  padding: 0;
   border: none;
   border-radius: 50%;
   background: transparent;
@@ -28,11 +31,12 @@
 .floatball__ball.is-dragging { cursor: grabbing; transform: scale(1.12); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
 .floatball__ball.is-open { transform: scale(1.08); }
 
-/* 收起态圆点：18px 半透明 logo，原位置；hover 放大提示可点 */
+/* 收起态圆点：18px 半透明 logo，原位置；hover 放大提示可点（同 ball：清零 UA padding） */
 .floatball__dot {
   position: fixed;
   width: 18px;
   height: 18px;
+  padding: 0;
   border: none;
   border-radius: 50%;
   background: transparent;

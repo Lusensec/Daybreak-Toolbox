@@ -1,19 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
 import {
-  MessageSquare, Terminal, Binary, Languages, StickyNote, Wrench, Square, X,
+  Home, MessageSquare, Terminal, Binary, Languages, StickyNote, Wrench, Square, X,
 } from "lucide-react";
 import { sendCommand, subscribeEvent } from "../../services/ws";
 import { useToast } from "../../components/toast";
 import { useMenuStore } from "../menu/store";
 import { useDetachStore } from "./detachStore";
+import { useTheme } from "../../theme/ThemeProvider";
 import "./FloatBall.css";
 
 /**
  * 页面内悬浮球（主视图常驻，z 高于子窗口层）：
  *  - 圆形小球可拖拽换位，位置/收起态持久化 localStorage（刷新保留，子窗口刷新收回不受影响）
  *  - 左键（无拖动）展开快捷面板；右键收起为小圆点（点圆点恢复）
- *  - 面板三组：页面跳转（固定菜单 5 页）/ 工具快启（tool.run，最多 6 个）/ 子窗口（open 幂等，已脱离则移动+置顶）
+ *  - 面板三组：页面（固定菜单，同样开子窗口）/ 工具快启（tool.run，最多 6 个）/ 子窗口（open 幂等，已脱离则移动+置顶）
  */
 
 const LS_KEY = "daybreak.floatball.v1";
@@ -21,41 +21,51 @@ const BALL = 44;
 
 interface BallState { x: number; y: number; off: boolean }
 
-/** 初始位置：右下距边 24px；读持久化 */
+/** 初始位置：右下距边 24px；读持久化（钳制到当前视口：窗口变小/拖动越界后球不会跑出可视区） */
 function loadBall(): BallState {
+  let x = window.innerWidth - 24 - BALL;
+  let y = window.innerHeight - 24 - BALL;
+  let off = false;
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (raw) {
-      const s = JSON.parse(raw) as Partial<BallState>;
-      const x = Number.isFinite(s.x) ? s.x! : 0;
-      const y = Number.isFinite(s.y) ? s.y! : 0;
-      return { x, y, off: s.off === true };
+      const p = JSON.parse(raw) as Partial<BallState>;
+      if (Number.isFinite(p.x)) x = p.x!;
+      if (Number.isFinite(p.y)) y = p.y!;
+      off = p.off === true;
     }
   } catch { /* 损坏按默认 */ }
-  return {
-    x: window.innerWidth - 24 - BALL,
-    y: window.innerHeight - 24 - BALL,
-    off: false,
-  };
+  return { x: clampV(x, window.innerWidth), y: clampV(y, window.innerHeight), off };
 }
 
-/** 面板内页面项（与固定菜单栏同名；图标取 AppShell 顶栏同款） */
-const PAGE_ITEMS = [
-  { to: "/ai", label: "AI 对话", icon: MessageSquare },
-  { to: "/shell", label: "终端管理", icon: Terminal },
-  { to: "/codec", label: "编解码", icon: Binary },
-  { to: "/translate", label: "汉英翻译", icon: Languages },
-  { to: "/note", label: "临时笔记", icon: StickyNote },
+/** 坐标钳制到当前视口（球 44px 整块留 8px 内边距；非法坐标回右下默认位） */
+function clampV(v: number, viewport: number): number {
+  if (!Number.isFinite(v)) return Math.max(8, viewport - 24 - BALL);
+  return Math.min(Math.max(8, v), Math.max(8, viewport - BALL - 8));
+}
+
+/** 面板「页面」组：系统固定菜单栏（与顶栏固定菜单同名，含「首页」；点击同样开子窗口，
+ *  内容由 renderMenuContent → FIXED_CONTENT 页面组件渲染；全局单例状态多窗共享） */
+const PAGE_ITEMS: { name: string; icon: React.ComponentType<{ size?: number | string }> }[] = [
+  { name: "首页", icon: Home },
+  { name: "AI 对话", icon: MessageSquare },
+  { name: "终端管理", icon: Terminal },
+  { name: "编解码", icon: Binary },
+  { name: "汉英翻译", icon: Languages },
+  { name: "临时笔记", icon: StickyNote },
 ];
 
 export function FloatBall() {
-  const navigate = useNavigate();
   const toast = useToast();
   const menus = useMenuStore((s) => s.menus);
   const tools = useMenuStore((s) => s.tools);
   const openWin = useDetachStore((s) => s.open);
   const focusWin = useDetachStore((s) => s.focus);
   const detached = useDetachStore((s) => s.detached);
+
+  // 球体徽章双主题：深色主题用深藏青底 logo.png；浅色主题用反色生成的 logo-light.png（米白底深色徽标）
+  const { isDark } = useTheme();
+  const logoSrc = isDark ? "/logo.png" : "/logo-light.png";
 
   const [ball, setBall] = useState<BallState>(loadBall);
   const [open, setOpen] = useState(false);
@@ -76,6 +86,15 @@ export function FloatBall() {
       if (p && typeof p === "object") setSetHidden(Boolean((p as Record<string, unknown>).hidden));
     });
     return () => { alive = false; un(); };
+  }, []);
+
+  // 视口变小（浏览器窗口缩放）时把球收拢回可视区：否则持久化坐标越界 → 球「不见了」
+  useEffect(() => {
+    const onR = () => {
+      setBall((s) => ({ ...s, x: clampV(s.x, window.innerWidth), y: clampV(s.y, window.innerHeight) }));
+    };
+    window.addEventListener("resize", onR);
+    return () => window.removeEventListener("resize", onR);
   }, []);
 
   // 面板外部点击 / Esc 收起
@@ -196,7 +215,7 @@ export function FloatBall() {
           }
         }}
       >
-        <img src="/logo.png" alt="" draggable={false} />
+        <img src={logoSrc} alt="" draggable={false} />
       </button>
     );
   }
@@ -212,13 +231,15 @@ export function FloatBall() {
           <div className="floatball__gtitle">页面</div>
           {PAGE_ITEMS.map((p) => (
             <button
-              key={p.to}
+              key={p.name}
               type="button"
               className="floatball__item"
-              onClick={() => { setOpen(false); navigate(p.to); }}
+              title={detached[p.name] ? "已脱离——点击置顶" : "以子窗口打开该页面"}
+              onClick={() => openMenuWindow(p.name)}
             >
               <p.icon size={14} />
-              <span>{p.label}</span>
+              <span>{p.name}</span>
+              {detached[p.name] ? <X size={12} className="floatball__badge" /> : null}
             </button>
           ))}
         </div>
@@ -272,7 +293,7 @@ export function FloatBall() {
         onPointerDown={onPointerDown}
         onContextMenu={(e) => { e.preventDefault(); toggleOff(); }}
       >
-        <img src="/logo.png" alt="破晓·工具箱" className="floatball__logo" draggable={false} />
+        <img src={logoSrc} alt="破晓·工具箱" className="floatball__logo" draggable={false} />
       </button>
     </div>
   );

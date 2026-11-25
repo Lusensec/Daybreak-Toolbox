@@ -30,15 +30,6 @@
   flex: 0 0 auto;
 }
 .tool-canvas__sep { color: var(--muted); margin: 0 2px; }
-.tool-canvas__home {
-  font-size: 12px;
-  color: var(--muted);
-  text-decoration: none;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.tool-canvas__home:hover { border-color: var(--accent); color: var(--accent); }
 
 .tool-canvas__empty {
   display: flex;

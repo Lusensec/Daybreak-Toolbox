@@ -6,7 +6,7 @@ import { sendCommand } from "../../services/ws";
 import { useToastStore } from "../../components/toast";
 import { useSettingsModal } from "../../store/settingsModal";
 import { useShortcutsStore } from "./store";
-import { allSlots, effectiveCombo, eventCombo, SLOT_PANEL, toolDefaults } from "./shortcuts";
+import { allSlots, effectiveCombo, eventCombo, SLOT_PANEL, SLOT_BALL_SHOW, toolDefaults } from "./shortcuts";
 
 /** 系统固定菜单栏 → 路由（与 App.tsx 一致） */
 const FIX_ROUTES: Record<string, string> = {
@@ -17,7 +17,7 @@ const FIX_ROUTES: Record<string, string> = {
 /**
  * 全局快捷键监听（AppShell 顶层挂载，渲染 null）。
  *
- * 匹配规则：keydown → 组合串（必须含 Ctrl）→ 与「生效槽位表」逐一比对（已存值优先于默认）。
+ * 匹配规则：keydown → 组合串（任意键或组合，须含普通键）→ 与「生效槽位表」逐一比对（已存值优先于默认）。
  * 抑制场景（不触发）：
  *  - 焦点在输入控件（input/textarea/select/contenteditable）或终端（.xterm）——打字不抢键
  *  - 设置模态框打开——正在改快捷键时不触发导航（录键在模态框内自行处理）
@@ -67,6 +67,18 @@ function dispatchSlot(slot: string, st: ReturnType<typeof useMenuStore.getState>
   if (slot === SLOT_PANEL) {
     st.clearActive();
     navigate("/");
+    return;
+  }
+
+  if (slot === SLOT_BALL_SHOW) {
+    // 悬浮球显隐切换：读当前状态 → 取反设置（非 Windows 平台命令仍成功但 available=false → 提示而非报错）
+    void sendCommand("ball.get_state", {})
+      .then((r) => sendCommand("ball.set_hidden", { hidden: !Boolean((r as { hidden?: boolean }).hidden) }))
+      .then((r) => {
+        if (r.available === false) toast.push("info", "当前平台无原生悬浮球（仅 Windows 桌面模式）");
+        else toast.push("ok", (r as { hidden?: boolean }).hidden ? "悬浮球已隐藏" : "悬浮球已显示");
+      })
+      .catch((err) => toast.push("err", `悬浮球操作失败：${err instanceof Error ? err.message : String(err)}`));
     return;
   }
 

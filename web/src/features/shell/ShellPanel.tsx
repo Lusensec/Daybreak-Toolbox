@@ -70,18 +70,12 @@ export function ShellPanel() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [lines]);
 
-  // 命令执行完毕（busy 释放、input 解除 disabled）后，把光标还回命令输入框
+  // 命令执行完毕（busy 释放、input 解除 disabled）后，把光标还回命令输入框；
+  // 挂载时 busy=false 同一路径 → 进入终端管理默认光标就在输入行。
+  // 注意：点击输出区**不**抢焦点（保留选择/复制命令结果的能力）。
   useEffect(() => {
     if (!busy) requestAnimationFrame(() => inputRef.current?.focus());
   }, [busy]);
-
-  // 点击终端任意位置（输出区）→ 焦点回到命令输入框。
-  // 工具栏（终端类型 select / 字号与清屏按钮）例外：rAF 焦点抢回会立刻关掉
-  // 刚展开的 select 原生下拉（「一闪而过」），因此整条 shell-bar 都不抢焦点。
-  function onPanelClick(e: React.MouseEvent) {
-    if ((e.target as HTMLElement).closest(".shell-bar")) return;
-    requestAnimationFrame(() => inputRef.current?.focus());
-  }
 
   // 挂载：静默初始化（终端默认空白，干净利落）——
   //   pwd 只用于初始化工具栏的路径芯片（不再回显进输出区）；探测可用终端类型
@@ -116,9 +110,11 @@ export function ShellPanel() {
     setBusy(true);
     try {
       // 远端模式：命令经 bridge 常驻 SSH 会话在目标主机执行（响应与本地同款 {ok,output,exit,truncated}）
+      // 长命令预算 90s：后端 cmd/ssh 单条最长 60s；PS 常驻超时后重试封顶 15s（全程 ≤ ~80s）
+      // —— 默认 15s 前端超时会先于后端放弃 → 误报「cmd shell.run timeout」
       const r: Record<string, unknown> = remote
-        ? await sendCommand("ssh.run", { alias: activeAlias, command, timeout: 60 })
-        : await sendCommand("shell.run", { session: SESSION, command });
+        ? await sendCommand("ssh.run", { alias: activeAlias, command, timeout: 60 }, 90000)
+        : await sendCommand("shell.run", { session: SESSION, command }, 90000);
       const out = String(r.output ?? "");
       if (!remote && r.clear) {
         setLines([]); // 清屏：本地 exit / clear（旧版 exit 也是清屏而非退出）
@@ -217,7 +213,7 @@ export function ShellPanel() {
   }
 
   return (
-    <div className="shell-panel" onClick={onPanelClick}>
+    <div className="shell-panel">
       <div className="shell-bar">
         <span className="shell-bar__title">
           {remote ? <Globe size={15} /> : <Terminal size={15} />}

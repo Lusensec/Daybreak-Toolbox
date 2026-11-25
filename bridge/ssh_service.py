@@ -273,8 +273,13 @@ def status() -> dict:
     """存活会话的别名列表（前端刷新后恢复「已连接」指示用）。"""
     with _guard:
         out = [a for a, c in list(_sessions.items()) if _alive(c)]
-        for dead in [a for a in list(_sessions) if a not in out]:
-            _sessions.pop(dead, None)
+        for a, c in list(_sessions.items()):
+            if a not in out:
+                _sessions.pop(a, None)
+                try:
+                    c.close()  # 死会话也要 close，避免底层 socket/线程滞留到 GC
+                except Exception:
+                    pass
     return {"active": out}
 
 

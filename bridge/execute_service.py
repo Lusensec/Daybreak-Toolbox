@@ -26,11 +26,11 @@ from .menu_service import (load_config, get_menu_entry, update_tool_path,
 
 # 项目根取自 menu_service（单一真相源：set_root 同时约束 工具读写 与 路径解析）
 
+# RUN_TYPES 以 menu_service 为唯一真相源（顶部 import）；本模块不再重复定义
+
 
 def _root() -> Path:
     return project_root()
-
-RUN_TYPES = ["直接打开", "命令行打开", "文件夹打开", "链接打开", "下载链接"]
 
 
 class ToolError(Exception):
@@ -158,7 +158,9 @@ def _run_local(tool: dict, run_type: str, target: str, menu: str, nav: str) -> d
     url = target if "http" in target else str(tool.get("工具路径", ""))
     try:
         if is_win:
-            subprocess.Popen(f"start msedge {url} & exit", shell=True)
+            # start "" 显式空窗口标题 + URL 加引号：含空格/特殊字符的 URL 不会被 start 误解析
+            # （旧写法 start msedge {url} 对含空格 URL 会丢参；非法 URL 不含裸引号，引号配对安全）
+            subprocess.Popen(f'start "" msedge "{url}" & exit', shell=True)
         else:
             subprocess.Popen(["xdg-open", url])
         return {"ok": True, "run_type": run_type, "message": f"已打开链接：{url}"}

@@ -1,18 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X, Plus, Trash2, RefreshCw, FolderOpen, Eye, EyeOff, Wrench, Brain, Save, ChevronDown, Languages, Keyboard, Server, Download, Star, CircleDot } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { X, Plus, Trash2, Pencil, Maximize2, Minimize2, RefreshCw, FolderOpen, Eye, EyeOff, Wrench, Brain, Save, ChevronDown, Languages, Keyboard, Server, Download, Star, Menu, List, Settings, SlidersHorizontal, Sun, Moon, Monitor } from "lucide-react";
 import { sendCommand, subscribeEvent } from "../services/ws";
 import { AboutDialog } from "./AboutDialog";
 import { useToast } from "./toast";
 import { useSettingsModal } from "../store/settingsModal";
+import { useTheme } from "../theme/ThemeProvider";
+import type { ThemeChoice } from "../theme/ThemeProvider";
+import { promptOpen, usePromptStore } from "./PromptDialog";
 import { FIXED_MENUS } from "../features/menu/fixedMenus";
 import { useDraggable } from "../hooks/useDraggable";
 import { useResize } from "../hooks/useResize";
 import { KeyCapture } from "../features/shortcuts/KeyCapture";
 import { useShortcutsStore } from "../features/shortcuts/store";
-import { findConflicts, SHORTCUT_FIX_MENUS, SLOT_PANEL, defaultToolCombo, slotDyn, slotFix, slotNav, slotTool } from "../features/shortcuts/shortcuts";
+import { findConflicts, SHORTCUT_FIX_MENUS, SLOT_PANEL, SLOT_BALL_SHOW, defaultToolCombo, slotDyn, slotFix, slotNav, slotTool } from "../features/shortcuts/shortcuts";
 import "./SettingsModal.css";
 
-export type TabKey = "tools" | "ai" | "translate" | "shortcuts" | "terminal" | "display" | "ball" | "update";
+export type TabKey = "general" | "menus" | "navs" | "tools" | "display" | "ai" | "shortcuts" | "translate" | "terminal" | "misc" | "update";
+
+/** 更新检查的固定 GitHub 仓库（「更新设置」已无仓库配置 UI；
+ *  必须与 bridge/update_service.DEFAULT_REPO 保持一致 —— 后端回退链的最终兜底）。 */
+const UPDATE_REPO = "Lusensec/Daybreak-Toolbox";
 
 interface MenuInfo {
   name: string;
@@ -65,18 +72,26 @@ function maskSecret(s: string): string {
 }
 
 /**
- * 工具箱设置模态框（固定 960x580，右侧按钮 / 首页卡 点击打开）。
- * 标签页（导航栏管理独立，位于菜单管理与工具管理中间）：
- *  菜单管理 → 导航栏管理 → 工具管理 → AI模型设置 → 更新记录
- *  - 菜单管理：菜单栏增删（menu.add/remove）
- *  - 导航栏管理：挂在某菜单栏下的导航入口（menu.add_nav/remove_nav）
- *  - 工具管理：menu.add_tool/remove_tool + menu.list_tools
+ * 工具箱设置模态框（可拖拽/单向拉伸，右侧按钮 / 首页卡 点击打开）。
+ * 标签页：
+ *  通用设置（默认打开页） → 菜单栏管理 → 导航栏管理 → 工具管理 → 菜单栏展示 → AI模型设置 → 快捷键设置 → 翻译设置 → 终端设置 → 其他设置（悬浮球等）→ 更新检查
+ *  - 菜单栏管理页：菜单栏列表（行点击选中 / 改名 / 删除）+ 新增菜单栏行
+ *  - 导航栏管理页：菜单栏下拉（选归属）+ 导航列表（行点击选中 / 改名 / 删除）+ 新增导航行
+ *  - 工具管理页：菜单/导航 双下拉 + 新增表单 + 按导航过滤列表；改名删除亦可走顶栏右键菜单
  *  - AI模型设置：ai.get_config/set_config/add_model/remove_model/test，
  *    别名必填，使用模型按别名排序动态展示，可增删自定义模型
  * 数据刷新：订阅 menu.changed / ai.config_changed 自动重载。
  */
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [tab, setTab] = useState<TabKey>("tools");
+  const [tab, setTab] = useState<TabKey>("general");
+
+  // 通用设置：主题（与顶栏主题循环按钮共用 ThemeProvider，立即生效 + 本地持久化）
+  const { theme, set: setTheme } = useTheme();
+  const THEME_CHOICES: { v: ThemeChoice; label: string; icon: React.ComponentType<{ size?: number | string }> }[] = [
+    { v: "light", label: "浅色", icon: Sun },
+    { v: "dark", label: "深色", icon: Moon },
+    { v: "system", label: "跟随系统", icon: Monitor },
+  ];
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   // 打开定位参数（store 提供，打开后消费一次）：指定标签页 + 工具管理内预选 菜单栏/导航栏
@@ -99,6 +114,29 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     onResize: (w, h) => setSize({ w, h }),
   });
 
+  // 单向拉伸锚点：首次拖把手时捕获面板左上角（视口坐标）并切到 position:fixed 定位。
+  // 居中模式下改 width/height 会被 flex 重新居中 → 四周对称扩张；钉住左上角后
+  // 拉伸只向右下延伸（单侧），手势结束后保持钉住位置。
+  const [pin, setPin] = useState<{ left: number; top: number } | null>(null);
+  const onGripPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!pin && panelRef.current) {
+      const r = panelRef.current.getBoundingClientRect();
+      setPin({ left: r.left, top: r.top });
+    }
+    onResizeStart(e);
+  };
+
+  // 全屏开关（⛶ 按钮 / 标题栏双击，同子窗口）：面板铺满整个视口（100vw×100vh，随窗口 resize 自动跟随）；
+  // 进出全屏不改 pin/size → 退出后自动回到全屏前的布局（居中/钉住/尺寸原样）
+  const [fs, setFs] = useState(false);
+
+  // 标题栏：双击 = 全屏/还原（替代原「双击复位」——退出全屏即回到全屏前布局）；
+  // 全屏中禁拖（整窗即视口，无移动意义）
+  const headProps = {
+    onPointerDown: (e: React.PointerEvent<HTMLElement>) => { if (!fs) handleProps.onPointerDown(e); },
+    onDoubleClick: () => setFs((v) => !v),
+  };
+
   // ---- 工具管理状态（菜单栏/导航栏/工具 三合一）----
   const [menus, setMenus] = useState<MenuInfo[]>([]);
   const [menuName, setMenuName] = useState("");
@@ -107,8 +145,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [activeMenu, setActiveMenu] = useState("");
   const [activeNav, setActiveNav] = useState("");          // 当前工具归属的导航栏（工具使用 字段）
-  const [addMenuOpen, setAddMenuOpen] = useState(false);   // 第 1 行 ＋ 展开「新增菜单栏」输入行
-  const [addNavOpen, setAddNavOpen] = useState(false);     // 第 2 行 ＋ 展开「新增导航栏」输入行
   const [fixedVis, setFixedVis] = useState<Record<string, number>>({}); // 固定菜单栏显隐表（config.json __fixed_menu_visible__）
   // 最新所选菜单栏（ref 镜像）：menu.changed 订阅回调闭包会过期，刷新时读 ref 保住用户选择
   const activeMenuRef = useRef(activeMenu);
@@ -118,6 +154,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [tRun, setTRun] = useState(RUN_TYPES[0]);
   const [tCmd, setTCmd] = useState("");
   const isLink = tRun === "链接打开" || tRun === "下载链接"; // 链接类：路径为 http(s)，不弹文件管理器
+  // 当前菜单的导航栏名列表（② 段列表数据源）
+  const activeNavs = menus.find((m) => m.name === activeMenu)?.navigation_bar_name ?? [];
+  // ③ 段工具列表：按当前导航过滤（未选导航时显示全量并标注归属）
+  const visibleTools = activeNav ? tools.filter((t) => (t.nav ?? "首页") === activeNav) : tools;
 
   /** 第 2 行右侧按钮：bridge 在本机弹原生文件管理器（选文件/选文件夹），结果回填路径输入框 */
   async function pickPath() {
@@ -138,9 +178,88 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     }
   }
 
+  // ---- 工具管理三段化选中联动（①② 段下拉框切换；后端广播 menu.changed → refreshMenus 自动刷新）----
+
+  /** 选中菜单（下拉）：②③ 段随之联动；ref 同步保证随后的 menu.changed 刷新保住选择 */
+  function selectMenu(m: MenuInfo) {
+    activeMenuRef.current = m.name;
+    setActiveMenu(m.name);
+    setActiveNav(m.navigation_bar_name[0] ?? "");
+    void sendCommand("menu.list_tools", { menu: m.name })
+      .then((r) => setTools((r.tools ?? []) as ToolInfo[]))
+      .catch(() => setTools([]));
+  }
+
+  /** 选中导航（下拉/列表行点击）：③ 段工具列表按此过滤 */
+  function selectNav(n: string) {
+    setActiveNav(n);
+  }
+
+  /** 菜单栏行改名：全局重命名对话框 → menu.rename；改名前同步 ref（menu.changed 刷新保住对新名的选择） */
+  async function renameMenuRow(name: string) {
+    const nn = await promptOpen(`重命名菜单栏「${name}」`, name);
+    if (nn === null) return;
+    activeMenuRef.current = nn;
+    try {
+      await sendCommand("menu.rename", { name, new_name: nn });
+      toast.ok(`菜单栏已改名为「${nn}」`);
+    } catch (e) {
+      toast.err(`改名失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** 菜单栏行删除：二次确认（含级联工具数）→ menu.remove（连同全部工具） */
+  async function deleteMenuRow(name: string) {
+    const cnt = menus.find((m) => m.name === name)?.tool_count ?? 0;
+    if (!window.confirm(`删除菜单栏「${name}」${cnt ? `及其 ${cnt} 个工具` : ""}？`)) return;
+    if (activeMenu === name) activeMenuRef.current = "";
+    try {
+      await sendCommand("menu.remove", { name });
+      toast.ok(`菜单栏「${name}」已删除`);
+    } catch (e) {
+      toast.err(`删除失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** 导航栏行改名：全局重命名对话框 → menu.rename_nav（参数名 new_name） */
+  async function renameNavRow(nav: string) {
+    if (!activeMenu) return;
+    const nn = await promptOpen(`重命名导航栏「${nav}」（菜单「${activeMenu}」）`, nav);
+    if (nn === null) return;
+    try {
+      await sendCommand("menu.rename_nav", { menu: activeMenu, nav, new_name: nn });
+      setActiveNav(nn);
+      toast.ok(`导航栏已改名为「${nn}」`);
+    } catch (e) {
+      toast.err(`改名失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** 导航栏行删除：二次确认（含该导航工具数）→ menu.remove_nav（级联删工具） */
+  async function deleteNavRow(nav: string) {
+    if (!activeMenu) return;
+    const cnt = tools.filter((t) => (t.nav ?? "首页") === nav).length;
+    if (!window.confirm(`删除导航栏「${nav}」${cnt ? `及其 ${cnt} 个工具` : ""}？`)) return;
+    try {
+      await sendCommand("menu.remove_nav", { menu: activeMenu, nav });
+      if (activeNav === nav) setActiveNav("");
+      toast.ok(`导航栏「${nav}」已删除`);
+    } catch (e) {
+      toast.err(`删除失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** 导航行的工具数（当前菜单的 tools 按 nav 分组） */
+  function navToolCount(n: string): number {
+    return tools.filter((t) => (t.nav ?? "首页") === n).length;
+  }
+
   // ---- AI 配置状态 ----
   const [ai, setAi] = useState<AiConfig>({ models: [], kinds: [], config: {} });
   const [aiModel, setAiModel] = useState("");
+  // 最新所选 AI 模型（ref 镜像）：refreshAi 空依赖闭包读不到 state，刷新配置时靠 ref 保住用户当前表单选择
+  const aiModelRef = useRef(aiModel);
+  useEffect(() => { aiModelRef.current = aiModel; }, [aiModel]);
   const [aiAlias, setAiAlias] = useState("");
   const [aiKind, setAiKind] = useState("openai");
   const [aiBaseUrl, setAiBaseUrl] = useState("");
@@ -304,8 +423,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     }
   }
 
-  // ---- 更新设置状态（GitHub 仓库配置 config/update.json + 检查更新结果）----
-  const [upRepo, setUpRepo] = useState("");
+  // ---- 更新设置状态（检查更新结果；仓库不再可配置——固定检查 UPDATE_REPO，
+  //      与 bridge/update_service.DEFAULT_REPO 同值，后端回退链兜底）----
   const [upChecking, setUpChecking] = useState(false);
   type UpResult = { kind: "idle" } | { kind: "ok"; msg: string } | { kind: "update"; msg: string; url: string } | { kind: "err"; msg: string };
   const [upResult, setUpResult] = useState<UpResult>({ kind: "idle" });
@@ -338,25 +457,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     });
     return un;
   }, [refreshBall]);
-
-  // 打开更新设置标签：拉已存仓库地址
-  useEffect(() => {
-    if (tab !== "update") return;
-    let cancel = false;
-    sendCommand("update.repo.get", {})
-      .then((r) => { if (!cancel) setUpRepo(String(r.repo ?? "")); })
-      .catch(() => {});
-    return () => { cancel = true; };
-  }, [tab]);
-
-  async function saveUpRepo() {
-    try {
-      await sendCommand("update.repo.save", { repo: upRepo.trim() });
-      toast.ok(upRepo.trim() ? "GitHub 仓库已保存" : "GitHub 仓库已清空");
-    } catch (e) {
-      toast.err(`保存失败：${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
 
   async function checkUpdate() {
     setUpChecking(true);
@@ -408,8 +508,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       // 不再把 aiModelTwo 重置为空 —— 打开设置时就能看到当前第二分栏模型
       const actives = cfg.models.filter((m) => (cfg.config[m]?.use_page ?? 0) !== 0);
       const primary = actives[0] ?? cfg.models[0] ?? "";
-      if (primary && cfg.config[primary]) {
-        loadModelIntoForm(cfg, primary);
+      // 表单跟随：用户当前选的模型仍在配置中则保留（保存配置触发 config_changed → refreshAi
+      // 不再把表单静默重置回主模型）；否则回落到主模型
+      const keep = aiModelRef.current && cfg.config[aiModelRef.current] ? aiModelRef.current : "";
+      const target = keep || primary;
+      if (target && cfg.config[target]) {
+        loadModelIntoForm(cfg, target);
       }
       setAiPage(actives.length >= 2 ? 2 : 1);
       setAiModelTwo(actives.length >= 2 ? actives[1] : "");
@@ -466,13 +570,19 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     return () => { unMenu(); unAi(); };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Esc 关闭
+  // Esc 关闭（全局重命名对话框打开时由其独占 Esc，不连带关掉设置框）
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (usePromptStore.getState().resolve) return;
+      if (e.key === "Escape") onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // 关闭时清掉单向拉伸锚点（pin 是视口坐标，跨次打开残留会漂到旧位置）
+  useEffect(() => { if (!open) setPin(null); }, [open]);
 
   if (!open) return null;
 
@@ -511,30 +621,47 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   }
 
   const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ size?: number | string }> }[] = [
+    { key: "general", label: "通用设置", icon: Settings },
+    { key: "menus", label: "菜单栏管理", icon: Menu },
+    { key: "navs", label: "导航栏管理", icon: List },
     { key: "tools", label: "工具管理", icon: Wrench },
-    { key: "ai", label: "AI模型设置", icon: Brain },
-    { key: "translate", label: "翻译设置", icon: Languages },
-    { key: "shortcuts", label: "快捷键设置", icon: Keyboard },
-    { key: "terminal", label: "终端设置", icon: Server },
     { key: "display", label: "菜单栏展示", icon: Eye },
-    { key: "ball", label: "悬浮球", icon: CircleDot },
-    { key: "update", label: "更新设置", icon: Download },
+    { key: "ai", label: "AI模型设置", icon: Brain },
+    { key: "shortcuts", label: "快捷键设置", icon: Keyboard },
+    { key: "translate", label: "翻译设置", icon: Languages },
+    { key: "terminal", label: "终端设置", icon: Server },
+    { key: "misc", label: "其他设置", icon: SlidersHorizontal },
+    { key: "update", label: "更新检查", icon: Download },
   ];
 
   return (
     <div className="settings-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div
-        className={"settings-modal" + (dragging ? " is-dragging" : "") + (resizing ? " is-resizing" : "")}
+        className={"settings-modal" + (dragging ? " is-dragging" : "") + (resizing ? " is-resizing" : "") + (fs ? " is-fs" : "")}
         ref={panelRef}
-        style={size ? { width: size.w, height: size.h } : undefined}
+        style={fs
+          ? { position: "fixed", left: 0, top: 0, width: "100vw", height: "100vh" }
+          : pin
+            ? { position: "fixed", left: pin.left, top: pin.top, width: size?.w ?? 960, height: size?.h ?? 580 }
+            : size ? { width: size.w, height: size.h } : undefined}
         role="dialog"
         aria-modal="true"
       >
-        <header className="settings-modal__head" ref={headRef} {...handleProps} title="按住拖拽 / 双击复位">
+        <header className="settings-modal__head" ref={headRef} {...headProps}
+          title={fs ? "双击 退出全屏" : "按住拖拽 / 双击 全屏"}>
           <h2 className="settings-modal__title">工具箱设置</h2>
-          <button className="settings-modal__close" onClick={onClose} title="关闭 (Esc)">
-            <X size={16} />
-          </button>
+          <span className="settings-modal__head-btns">
+            <button
+              className="settings-modal__full"
+              title={fs ? "退出全屏" : "全屏"}
+              onClick={() => setFs((v) => !v)}
+            >
+              {fs ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+            </button>
+            <button className="settings-modal__close" onClick={onClose} title="关闭 (Esc)">
+              <X size={16} />
+            </button>
+          </span>
         </header>
 
         <div className="settings-modal__body">
@@ -552,122 +679,205 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           <div className="settings-content">
 
 
-          {/* ================= 工具管理（菜单栏 / 导航栏 / 工具 三合一） =================
-              第 1 行：菜单栏 选择 + ＋（展开新增菜单栏）+ 删除当前菜单栏
-              第 2 行：导航栏 选择 + ＋（展开新增导航栏）+ 删除当前导航栏
-              第 3 行起：新增工具设定（归属 = 当前所选 菜单栏/导航栏）+ 工具列表 */}
-          {tab === "tools" ? (
-            <div className="settings-tools">
-              <h3 className="settings-sub__title">工具管理 <span className="settings-sub__hint">（菜单栏 / 导航栏 / 工具，保存即时生效）</span></h3>
+          {/* ================= 通用设置页（默认打开页；基础设置：当前 主题，后续逐步增加） ================= */}
+          {tab === "general" ? (
+            <div className="settings-display">
+              <h3 className="settings-sub__title">通用设置 <span className="settings-sub__hint">（基础设置，后续将逐步增加更多项）</span></h3>
 
-              {/* 第 1 行：菜单栏选择 + ＋ + 删除 */}
+              <div className="menu-vis-group">
+                <div className="menu-vis-group__title">外观</div>
+                <div className="form-row">
+                  {THEME_CHOICES.map((t) => {
+                    const TIcon = t.icon;
+                    return (
+                      <button
+                        key={t.v}
+                        type="button"
+                        className={"form-btn" + (theme === t.v ? " primary" : "")}
+                        title={theme === t.v ? "当前主题" : `切换为${t.label}`}
+                        onClick={() => setTheme(t.v)}
+                      >
+                        <TIcon size={13} /> {t.label}
+                      </button>
+                    );
+                  })}
+                  <span className="settings-sub__hint">切换即时生效，选择保存在本地（刷新保持）</span>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {/* ================= 菜单栏管理页（新增菜单栏行（列表上方） + 菜单栏列表：行点击选中 / 改名 / 删除） ================= */}
+          {tab === "menus" ? (
+            <div className="settings-tools">
+              <h3 className="settings-sub__title">菜单栏管理 <span className="settings-sub__hint">（点行选中；✎ 改名 / 🗑 删除连同其下全部工具；保存即时生效）</span></h3>
+              <div className="form-row form-row--indent">
+                <input placeholder="新增菜单栏名称（勿用空格与特殊字符，将作为 菜单/导航 目录段）" value={menuName} onChange={(e) => setMenuName(e.target.value)} />
+                <input type="color" value={menuColor} onChange={(e) => setMenuColor(e.target.value)} title="菜单栏颜色" />
+                <button
+                  className="form-btn primary"
+                  disabled={busy || !menuName.trim()}
+                  onClick={() => void run(
+                    async () => {
+                      const created = menuName.trim();
+                      await sendCommand("menu.add", {
+                        name: created,
+                        menu_color: menuColor,
+                        navigation: ["首页"],
+                      });
+                      setMenuName("");
+                      // 立即选中新增菜单栏（menu.changed 触发的 refreshMenus 读 ref，需先同步）
+                      activeMenuRef.current = created;
+                      setActiveMenu(created);
+                      setActiveNav("首页");
+                      const r = await sendCommand("menu.list_tools", { menu: created });
+                      setTools((r.tools ?? []) as ToolInfo[]);
+                    },
+                    "菜单栏已添加（无需指定工具文件夹）"
+                  )}
+                >
+                  <Plus size={13} /> 添加菜单栏
+                </button>
+              </div>
+              <div className="mgmt-list">
+                {menus.length === 0 ? <div className="menu-list__empty">暂无菜单栏（在上方添加）</div> : null}
+                {menus.map((m) => (
+                  <div
+                    key={m.name}
+                    className={"mgmt-row" + (activeMenu === m.name ? " is-active" : "")}
+                    title="点击选中该菜单栏（导航栏管理 / 工具管理页随之一同联动）"
+                    onClick={() => selectMenu(m)}
+                  >
+                    <span className="mgmt-row__dot" style={{ background: m.menu_color }} />
+                    <span className="mgmt-row__name">{m.name}</span>
+                    <span className="mgmt-row__meta">{m.tool_count} 个工具</span>
+                    <button
+                      className="mgmt-row__btn"
+                      title="改名菜单栏"
+                      disabled={busy}
+                      onClick={(e) => { e.stopPropagation(); void renameMenuRow(m.name); }}
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    <button
+                      className="mgmt-row__btn"
+                      title="删除菜单栏（连同其下全部工具）"
+                      disabled={busy}
+                      onClick={(e) => { e.stopPropagation(); void deleteMenuRow(m.name); }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {/* ================= 导航栏管理页（菜单栏下拉选归属 + 新增导航行（列表上方） + 导航列表：行点击选中 / 改名 / 删除） ================= */}
+          {tab === "navs" ? (
+            <div className="settings-tools">
+              <h3 className="settings-sub__title">导航栏管理 <span className="settings-sub__hint">（选归属菜单栏后查看/管理该菜单的导航；点行选中，✎ 改名 / 🗑 删除连同其下工具）</span></h3>
               <div className="form-row">
                 <label className="form-field form-field--inline">
                   <span className="form-field__label">菜单栏:</span>
                   <select
                     value={activeMenu}
                     onChange={(e) => {
-                      const v = e.target.value;
-                      activeMenuRef.current = v;
-                      setActiveMenu(v);
-                      void sendCommand("menu.list_tools", { menu: v })
-                        .then((r) => setTools((r.tools ?? []) as ToolInfo[]))
-                        .catch(() => setTools([]));
-                      setActiveNav((menus.find((m) => m.name === v)?.navigation_bar_name ?? [])[0] ?? "");
+                      const m = menus.find((x) => x.name === e.target.value);
+                      if (m) selectMenu(m);
                     }}
                   >
                     <option value="" disabled>选择菜单栏…</option>
                     {menus.map((m) => <option key={m.name} value={m.name}>{m.name}（{m.tool_count}）</option>)}
                   </select>
                 </label>
-                <button
-                  className="form-btn"
-                  onClick={() => setAddMenuOpen(!addMenuOpen)}
-                  title={addMenuOpen ? "收起新增菜单栏" : "新增菜单栏"}
-                >
-                  <Plus size={13} />
-                </button>
-                <button className="form-btn" onClick={() => void refreshMenus()} title="刷新菜单 / 导航 / 工具"><RefreshCw size={13} /></button>
               </div>
-              {addMenuOpen ? (
-                <div className="form-row form-row--indent">
-                  <input placeholder="菜单栏名称（勿用空格与特殊字符，将作为 菜单/导航 目录段）" value={menuName} onChange={(e) => setMenuName(e.target.value)} />
-                  <input type="color" value={menuColor} onChange={(e) => setMenuColor(e.target.value)} title="菜单栏颜色" />
-                  <button
-                    className="form-btn primary"
-                    disabled={busy || !menuName.trim()}
-                    onClick={() => void run(
-                      async () => {
-                        const created = menuName.trim();
-                        await sendCommand("menu.add", {
-                          name: created,
-                          menu_color: menuColor,
-                          navigation: ["首页"],
-                        });
-                        setMenuName("");
-                        setAddMenuOpen(false);
-                        // 立即选中新增菜单栏（menu.changed 触发的 refreshMenus 读 ref，需先同步）
-                        activeMenuRef.current = created;
-                        setActiveMenu(created);
-                        setActiveNav("首页");
-                        const r = await sendCommand("menu.list_tools", { menu: created });
-                        setTools((r.tools ?? []) as ToolInfo[]);
-                      },
-                      "菜单栏已添加（无需指定工具文件夹）"
-                    )}
+              <div className="form-row form-row--indent">
+                <input placeholder="新增导航栏名称（归属上方所选菜单栏；如 扫描 / 提权 / 后渗透）" value={navName} onChange={(e) => setNavName(e.target.value)} disabled={!activeMenu} />
+                <button
+                  className="form-btn primary"
+                  disabled={busy || !activeMenu || !navName.trim()}
+                  onClick={() => void run(
+                    async () => {
+                      const created = navName.trim();
+                      await sendCommand("menu.add_nav", { menu: activeMenu, nav: created });
+                      setNavName("");
+                      setActiveNav(created);
+                    },
+                    "导航栏已添加"
+                  )}
+                >
+                  <Plus size={13} /> 添加导航栏
+                </button>
+              </div>
+              <div className="mgmt-list">
+                {!activeMenu
+                  ? <div className="menu-list__empty">先在上方选择菜单栏</div>
+                  : activeNavs.length === 0
+                    ? <div className="menu-list__empty">该菜单下暂无导航栏（在上方添加）</div>
+                    : null}
+                {activeNavs.map((n) => (
+                  <div
+                    key={n}
+                    className={"mgmt-row" + (activeNav === n ? " is-active" : "")}
+                    title="点击选中该导航栏（工具管理页工具列表随之过滤）"
+                    onClick={() => selectNav(n)}
                   >
-                    <Plus size={13} /> 添加菜单栏
-                  </button>
-                </div>
-              ) : null}
+                    <span className="mgmt-row__name">{n}</span>
+                    <span className="mgmt-row__meta">{navToolCount(n)} 个工具</span>
+                    <button
+                      className="mgmt-row__btn"
+                      title="改名导航栏"
+                      disabled={busy}
+                      onClick={(e) => { e.stopPropagation(); void renameNavRow(n); }}
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    <button
+                      className="mgmt-row__btn"
+                      title="删除导航栏（连同其下工具）"
+                      disabled={busy}
+                      onClick={(e) => { e.stopPropagation(); void deleteNavRow(n); }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
-              {/* 第 2 行：导航栏选择 + ＋ + 删除 */}
+          {/* ================= 工具管理页（菜单/导航 双下拉选归属 + 新增工具表单 + 按导航过滤工具列表） =================
+              所有写操作后后端广播 menu.changed → 本标签订阅 refreshMenus 自动刷新（读 ref 保选择） */}
+          {tab === "tools" ? (
+            <div className="settings-tools">
+              <div className="tools-subhead">
+                <span className="settings-sub__title">工具管理</span>
+                <span className="settings-sub__hint">归属：{activeMenu || "未选菜单"} / {activeNav || "首页"}（工具列表按当前导航过滤）</span>
+              </div>
               <div className="form-row">
                 <label className="form-field form-field--inline">
+                  <span className="form-field__label">菜单栏:</span>
+                  <select
+                    value={activeMenu}
+                    onChange={(e) => {
+                      const m = menus.find((x) => x.name === e.target.value);
+                      if (m) selectMenu(m);
+                    }}
+                  >
+                    <option value="" disabled>选择菜单栏…</option>
+                    {menus.map((m) => <option key={m.name} value={m.name}>{m.name}（{m.tool_count}）</option>)}
+                  </select>
+                </label>
+                <label className="form-field form-field--inline">
                   <span className="form-field__label">导航栏:</span>
-                  <select value={activeNav} disabled={!activeMenu} onChange={(e) => setActiveNav(e.target.value)}>
+                  <select value={activeNav} disabled={!activeMenu} onChange={(e) => selectNav(e.target.value)}>
                     <option value="">{activeMenu ? "选择导航栏…" : "请先选择菜单栏"}</option>
-                    {(menus.find((m) => m.name === activeMenu)?.navigation_bar_name ?? []).map((n) => (
+                    {activeNavs.map((n) => (
                       <option key={n} value={n}>{n}</option>
                     ))}
                   </select>
                 </label>
-                <button
-                  className="form-btn"
-                  disabled={!activeMenu}
-                  onClick={() => setAddNavOpen(!addNavOpen)}
-                  title={addNavOpen ? "收起新增导航栏" : "新增导航栏"}
-                >
-                  <Plus size={13} />
-                </button>
-              </div>
-              {addNavOpen ? (
-                <div className="form-row form-row--indent">
-                  <input placeholder="导航栏名称（如 扫描 / 提权 / 后渗透）" value={navName} onChange={(e) => setNavName(e.target.value)} />
-                  <button
-                    className="form-btn primary"
-                    disabled={busy || !activeMenu || !navName.trim()}
-                    onClick={() => void run(
-                      async () => {
-                        const created = navName.trim();
-                        await sendCommand("menu.add_nav", { menu: activeMenu, nav: created });
-                        setNavName("");
-                        setAddNavOpen(false);
-                        setActiveNav(created);
-                      },
-                      "导航栏已添加"
-                    )}
-                  >
-                    <Plus size={13} /> 添加导航栏
-                  </button>
-                </div>
-              ) : null}
-
-              {/* 第 3 行起：新增工具设定（工具自动归属当前所选 菜单栏 / 导航栏）
-                  第 1 行 工具名称；第 2 行 工具路径 + 右侧文件管理器按钮；第 3 行 启动方式/命令 + 添加 */}
-              <div className="tools-subhead">
-                <span className="settings-sub__title">新增工具</span>
-                <span className="settings-sub__hint">归属：{activeMenu || "未选菜单"} / {activeNav || "首页"}</span>
               </div>
               <div className="form-row">
                 <input placeholder="工具名称" value={tName} onChange={(e) => setTName(e.target.value)} />
@@ -724,10 +934,16 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 </div>
               ) : null}
 
-              {/* 工具列表：所选菜单栏全部工具，逐条标注归属导航栏，可删除 */}
+              {/* 工具列表：按当前导航过滤（未选导航时全量），逐条标注归属导航，可删除 */}
               <div className="tool-list">
-                {tools.length === 0 ? <div className="menu-list__empty">该菜单栏暂无工具</div> : null}
-                {tools.map((t) => (
+                {visibleTools.length === 0
+                  ? <div className="menu-list__empty">{activeNav ? `「${activeNav}」下暂无工具（在上方添加，或用「导航栏:」下拉切换导航）` : "该菜单栏暂无工具（在上方添加）"}</div>
+                  : (
+                    <div className="settings-sub__hint" style={{ marginBottom: 6 }}>
+                      {activeNav ? `当前显示「${activeNav}」的 ${visibleTools.length} 个工具（用「导航栏:」下拉可切换导航）` : `全部 ${visibleTools.length} 个工具`}
+                    </div>
+                  )}
+                {visibleTools.map((t) => (
                   <div key={t.工具名称} className="tool-item">
                     <span className="tool-item__name">{t.工具名称}</span>
                     <span className="tool-item__meta">[{t.启动方式}] {t.工具路径}</span>
@@ -753,67 +969,68 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="settings-ai">
               <h3 className="settings-sub__title">AI 对话模型 <span className="settings-sub__hint">（保存后立即生效，无需重启；别名必填，下拉按别名排序）</span></h3>
 
-              {/* 模型列表：动态增删（添加表单在列表上方） */}
+              {/* 模型列表：动态增删（分栏/历史设置行在上，添加模型行在下） */}
               <div className="ai-model-list">
+                {/* 会话分栏（原在各模型详情内，现固定置于「添加模型」行上方）+ 历史轮数 */}
                 <div className="form-row">
-                  <input placeholder="新模型内部名（如 gpt4o）" value={newModel} onChange={(e) => setNewModel(e.target.value)} />
-                  <input placeholder="别名（必填）" value={newAlias} onChange={(e) => setNewAlias(e.target.value)} />
-                  <button
-                    className="form-btn primary"
-                    disabled={busy || !newModel.trim() || !newAlias.trim()}
-                    onClick={() => void run(
-                      async () => {
-                        await sendCommand("ai.add_model", { model: newModel.trim(), alias: newAlias.trim(), kind: "openai" });
-                        setNewModel(""); setNewAlias("");
-                      },
-                      "模型已添加"
-                    )}
+                <label className="form-field">
+                  <span className="form-field__label">分栏数量:</span>
+                  <select value={String(aiPage)} onChange={(e) => setAiPage(Number(e.target.value))}>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                  </select>
+                </label>
+                <label className="form-field">
+                  <span className="form-field__label">分栏模型:</span>
+                  <select value={aiModelTwo} disabled={aiPage !== 2} onChange={(e) => setAiModelTwo(e.target.value)}>
+                    <option value="">{aiPage === 2 ? "选择第二个分栏模型…" : "分栏数量为 2 时启用"}</option>
+                    {ai.models.filter((mm) => mm !== aiModel || mm === aiModelTwo).map((mm) => (
+                      <option key={mm} value={mm}>{modelDisplay(ai, mm)}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="form-field" title="对话上下文保留的历史轮数（即时生效，无需重启）">
+                  <span className="form-field__label">历史轮数:</span>
+                  <select
+                    value={String(aiHistory)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setAiHistory(v);
+                      void run(() => sendCommand("ai.set_history", { rounds: v }), `历史轮数已设为 ${v} 轮（即时生效）`);
+                    }}
                   >
-                    <Plus size={13} /> 添加模型
-                  </button>
-                </div>
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </label>
+              </div>
+              {aiPage === 2 && !aiModelTwo ? (
+                <div className="settings-notice err">分栏数量为 2 时需选择第二个分栏模型</div>
+              ) : aiPage === 2 && !!aiModelTwo && aiModelTwo === aiModel ? (
+                <div className="settings-notice err">分栏模型与当前表单模型（主分栏）相同，请切换表单模型或重选分栏模型</div>
+              ) : null}
 
-                {/* 会话分栏（原在各模型详情内，现固定置于「添加模型」行下方）+ 历史轮数 */}
-                <div className="form-row">
-                  <label className="form-field">
-                    <span className="form-field__label">分栏数量:</span>
-                    <select value={String(aiPage)} onChange={(e) => setAiPage(Number(e.target.value))}>
-                      <option value="1">1</option>
-                      <option value="2">2</option>
-                    </select>
-                  </label>
-                  <label className="form-field">
-                    <span className="form-field__label">分栏模型:</span>
-                    <select value={aiModelTwo} disabled={aiPage !== 2} onChange={(e) => setAiModelTwo(e.target.value)}>
-                      <option value="">{aiPage === 2 ? "选择第二个分栏模型…" : "分栏数量为 2 时启用"}</option>
-                      {ai.models.filter((mm) => mm !== aiModel || mm === aiModelTwo).map((mm) => (
-                        <option key={mm} value={mm}>{modelDisplay(ai, mm)}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="form-field" title="对话上下文保留的历史轮数（即时生效，无需重启）">
-                    <span className="form-field__label">历史轮数:</span>
-                    <select
-                      value={String(aiHistory)}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setAiHistory(v);
-                        void run(() => sendCommand("ai.set_history", { rounds: v }), `历史轮数已设为 ${v} 轮（即时生效）`);
-                      }}
-                    >
-                      <option value="10">10</option>
-                      <option value="20">20</option>
-                      <option value="50">50</option>
-                      <option value="100">100</option>
-                    </select>
-                  </label>
-                </div>
-                {aiPage === 2 && !aiModelTwo ? (
-                  <div className="settings-notice err">分栏数量为 2 时需选择第二个分栏模型</div>
-                ) : aiPage === 2 && !!aiModelTwo && aiModelTwo === aiModel ? (
-                  <div className="settings-notice err">分栏模型与当前表单模型（主分栏）相同，请切换表单模型或重选分栏模型</div>
-                ) : null}
-                {ai.models.map((m) => {
+              {/* 添加模型行（位于分栏设置下方、模型列表上方） */}
+              <div className="form-row">
+                <input placeholder="新模型内部名（如 gpt4o）" value={newModel} onChange={(e) => setNewModel(e.target.value)} />
+                <input placeholder="别名（必填）" value={newAlias} onChange={(e) => setNewAlias(e.target.value)} />
+                <button
+                  className="form-btn primary"
+                  disabled={busy || !newModel.trim() || !newAlias.trim()}
+                  onClick={() => void run(
+                    async () => {
+                      await sendCommand("ai.add_model", { model: newModel.trim(), alias: newAlias.trim(), kind: "openai" });
+                      setNewModel(""); setNewAlias("");
+                    },
+                    "模型已添加"
+                  )}
+                >
+                  <Plus size={13} /> 添加模型
+                </button>
+              </div>
+              {ai.models.map((m) => {
                   const c = ai.config[m] ?? {};
                   const inUse = (c.use_page ?? 0) !== 0;
                   const expanded = expandedModel === m;
@@ -1005,13 +1222,21 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               默认组合按当前菜单顺序生成（Ctrl+N / Ctrl+Alt+N / Ctrl+Shift+N / Ctrl+Space），改键落盘 */}
           {tab === "shortcuts" ? (
             <div className="settings-shortcuts">
-              <h3 className="settings-sub__title">快捷键设置 <span className="settings-sub__hint">（组合键须含 Ctrl；点组合键重新录制，点 ✕ 停用；⚠ 表示多槽位撞车，后按者先响应）</span></h3>
+              <h3 className="settings-sub__title">快捷键设置 <span className="settings-sub__hint">（任意键或组合键均可，Ctrl 非必须；点按键重新录制，点 ✕ 停用；⚠ 表示多槽位撞车，后按者先响应）</span></h3>
 
               <div className="sc-group">
                 <div className="sc-group__title">面板</div>
                 <div className="sc-row">
                   <span className="sc-row__label">回到面板</span>
                   <KeyCapture slotKey={SLOT_PANEL} dynMenus={dynNames} fixMenus={FIXED_MENUS} conflict={scConflicts.has(SLOT_PANEL)} />
+                </div>
+              </div>
+
+              <div className="sc-group">
+                <div className="sc-group__title">悬浮球显隐（同一按键 显示↔隐藏 切换；无默认组合，点按键录制任意键/组合，✕ 停用）</div>
+                <div className="sc-row">
+                  <span className="sc-row__label">悬浮球显示/隐藏</span>
+                  <KeyCapture slotKey={SLOT_BALL_SHOW} dynMenus={dynNames} fixMenus={FIXED_MENUS} conflict={scConflicts.has(SLOT_BALL_SHOW)} />
                 </div>
               </div>
 
@@ -1199,10 +1424,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
           ) : null}
 
-          {/* ================= 悬浮球（原生置顶小球：置顶开关 + 隐藏开关；原生球不可用时仅提示） =================
+          {/* ================= 其他设置（基础设置集合：当前含 悬浮球，后续基础设置归入此处） =================
+              悬浮球（原生置顶小球：置顶开关 + 隐藏开关；原生球不可用时仅提示）
               状态源 config/ball_pos.json（bridge 持久化）；变更广播 ball.state 实时同步 */}
-          {tab === "ball" ? (
+          {tab === "misc" ? (
             <div className="settings-display">
+              <h3 className="settings-sub__title">其他设置 <span className="settings-sub__hint">（基础设置集合，后续更多基础设置将归入此处）</span></h3>
+
               <h3 className="settings-sub__title">悬浮球 <span className="settings-sub__hint">（页面内小球随时可用；原生置顶小球由 bridge 进程运行，可最小化共存）</span></h3>
 
               {!ballAvail ? (
@@ -1251,24 +1479,16 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           ) : null}
 
           {/* ================= 更新设置（GitHub 检查更新 + 工具箱介绍/点赞 + 版本更新记录） =================
-              检查更新：update.check 对比本地版本与仓库 latest Release；仓库地址存 config/update.json */}
+              检查更新：update.check 对比本地版本与内置仓库（UPDATE_REPO）latest Release；无仓库配置 UI */}
           {tab === "update" ? (
             <div className="settings-update">
-              <h3 className="settings-sub__title">检查更新 <span className="settings-sub__hint">（请求 GitHub 仓库最新 Release，与本地版本对比）</span></h3>
+              <h3 className="settings-sub__title">检查更新 <span className="settings-sub__hint">（检查内置仓库 {UPDATE_REPO} 的最新 Release，与本地版本对比）</span></h3>
 
               <div className="form-row">
-                <input
-                  placeholder="GitHub 仓库地址（owner/repo，如 myuser/daybreak-toolbox；留空 = 未配置）"
-                  value={upRepo}
-                  onChange={(e) => setUpRepo(e.target.value)}
-                />
-                <button className="form-btn" onClick={() => void saveUpRepo()} title="保存仓库地址到 config/update.json">
-                  <Save size={13} /> 保存仓库
-                </button>
                 <button
                   className="form-btn primary"
-                  disabled={upChecking || !upRepo.trim()}
-                  title={!upRepo.trim() ? "先配置并保存 GitHub 仓库地址" : "检查 GitHub 是否有新版本"}
+                  disabled={upChecking}
+                  title="检查 GitHub 是否有新版本"
                   onClick={() => void checkUpdate()}
                 >
                   {upChecking ? <RefreshCw size={13} className="spin" /> : <Download size={13} />} 检查更新
@@ -1299,19 +1519,15 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   本地运行、数据不出机器。若觉得好用，欢迎去 GitHub 点个 Star 支持持续更新！
                 </p>
                 <div className="update-intro__star">
-                  {upRepo.trim() ? (
-                    <a
-                      className="update-star"
-                      href={`https://github.com/${upRepo.trim()}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="在新标签页打开仓库并点赞（Star）"
-                    >
-                      <Star size={15} /> 去 GitHub 点赞
-                    </a>
-                  ) : (
-                    <span className="settings-sub__hint">配置并保存上方的 GitHub 仓库地址后，可在此点赞</span>
-                  )}
+                  <a
+                    className="update-star"
+                    href={`https://github.com/${UPDATE_REPO}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="在新标签页打开仓库并点赞（Star）"
+                  >
+                    <Star size={15} /> 去 GitHub 点赞
+                  </a>
                 </div>
               </div>
 
@@ -1321,12 +1537,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           ) : null}
           </div>
         </div>
-        {/* 右下角拉伸把手（min 680x420 / max 1600x1000，且不超过视口） */}
-        <div
-          className={"resize-grip" + (resizing ? " is-resizing" : "")}
-          onPointerDown={onResizeStart}
-          title="拖动拉伸（最小 680x420）"
-        />
+        {/* 右下角拉伸把手（min 680x420 / max 1600x1000，且不超过视口；首次拖动锚定左上角 → 单向拉伸；全屏时隐藏） */}
+        {!fs ? (
+          <div
+            className={"resize-grip" + (resizing ? " is-resizing" : "")}
+            onPointerDown={onGripPointerDown}
+            title="拖动拉伸（最小 680x420）"
+          />
+        ) : null}
       </div>
     </div>
   );

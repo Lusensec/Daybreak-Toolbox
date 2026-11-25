@@ -11,7 +11,11 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
+
+#: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
+#: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
+DEFAULT_REPO = "Lusensec/Daybreak-Toolbox"
 
 import sys as _sys
 
@@ -88,10 +92,11 @@ def _parse_version(v) -> tuple | None:
 
 
 def check_update(repo: str) -> dict:
-    """对比本地 APP_VERSION 与 GitHub latest Release（阻塞调用，main 里走 to_thread）。"""
-    repo = (repo or "").strip()
-    if not repo:
-        raise UpdateError("UPDATE_NO_REPO", "未配置 GitHub 仓库地址（owner/repo）")
+    """对比本地 APP_VERSION 与 GitHub latest Release（阻塞调用，main 里走 to_thread）。
+
+    仓库回退链：入参 repo → 已存配置（config/update.json）→ 内置 DEFAULT_REPO。
+    前端「更新设置」已无仓库配置 UI，通常发空入参走 DEFAULT_REPO。"""
+    repo = (repo or "").strip() or get_repo().strip() or DEFAULT_REPO
     try:
         data = _http_get_json(f"https://api.github.com/repos/{repo}/releases/latest")
     except urllib.error.HTTPError as e:
@@ -127,6 +132,17 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.1":
+"""
+1、工具箱设置左侧导航拆分：新增「通用设置」（默认打开，深色/浅色/跟随系统主题切换），菜单栏管理、导航栏管理、工具管理各自独立成页（新增行置顶 + 列表管理），工具画布移除「← 返回」
+2、子窗口体验：双击标题栏 / ⛶ 按钮全屏（工具箱设置同），修复子窗口被设置弹窗遮挡的层级问题
+3、悬浮球新增「页面」组：一键打开 6 个系统页子窗口（首页/AI 对话/终端管理/编解码/汉英翻译/临时笔记）；修复窗口缩小时球坐标越界
+4、快捷键支持任意键（可不带 Ctrl，如 K / F5 / 空格或修饰键组合）；悬浮球显示/隐藏合并为单一 toggle 键
+5、重命名美化：菜单栏/导航栏重命名改用全局模态对话框（Enter 确定 / Esc 取消），替换原生 prompt；菜单与导航右键新增「添加菜单栏」直达设置
+6、终端管理：点击输出区不再抢占输入框焦点，复制结果更顺手
+7、性能：页面级懒加载拆分主包（~305KB），移除未使用的 react-markdown 依赖
+8、「更新设置」菜单项更名「更新检查」
+""",
     "v2.0.0":
 """
 1、架构重构：React + TypeScript + Vite 前端 + FastAPI/uvicorn WebSocket 桥（单进程 127.0.0.1:8765），替代旧版 tkinter 单体

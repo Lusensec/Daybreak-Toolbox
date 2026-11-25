@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router";
+import { useParams } from "react-router";
 import { Package, Loader2, Plus } from "lucide-react";
 import { sendCommand } from "../services/ws";
 import { useMenuStore } from "../features/menu/store";
@@ -77,7 +77,6 @@ export function ToolCanvas() {
           <span className="tool-canvas__sep">/</span>
           <span>{nav}</span>
         </span>
-        <Link to="/" className="tool-canvas__home">← 返回</Link>
       </div>
 
       {loading ? (
@@ -97,7 +96,7 @@ export function ToolCanvas() {
             <Plus size={26} />
           </button>
           <div className="tool-canvas__hint">
-            点击 ＋ 在「{menu} / {nav}」下添加工具（工具存于 config/config.json，相对路径基于「{menu} / {nav}」目录）
+            点击 ＋ 在「{menu} / {nav}」下添加工具
           </div>
         </div>
       ) : (

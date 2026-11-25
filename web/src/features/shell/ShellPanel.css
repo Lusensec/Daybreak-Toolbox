@@ -100,12 +100,13 @@
   word-break: break-word;
 }
 
-/* 命令块：命令 + 其结果归为一块，块与块之间用虚线分隔（视觉分组） */
-.shell-block { min-height: 1em; }
-.shell-block + .shell-block {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed color-mix(in srgb, var(--border) 75%, transparent);
+/* 命令块：命令 + 其结果归为一块；虚线画在每块**底部**（执行结束、输出渲染后立即出现，
+   而不是等下一条命令产生新块时才在下一块顶部出现；块间视觉间距与旧版一致 = 17px） */
+.shell-block {
+  min-height: 1em;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--border) 75%, transparent);
 }
 .shell-line { min-height: 1em; }
 .shell-line--cmd  { color: #57d364; font-weight: 600; }   /* 用户命令：绿色，与结果（白/浅灰）拉开区分 */

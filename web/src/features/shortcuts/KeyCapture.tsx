@@ -6,7 +6,7 @@ import { effectiveCombo, eventCombo, defaultCombo } from "./shortcuts";
 /**
  * 快捷键录入控件：
  *  - 显示生效组合（已存值优先，否则默认，均无则「未设置」）；默认值带「默认」小标
- *  - 点击 → 进入录键态：按下 含 Ctrl 的组合即写入（Esc 取消）；非法组合给出提示
+ *  - 点击 → 进入录键态：按下 任意键或组合（须含普通键）即写入（Esc 取消）；非法按键给出提示
  *  - 「✕」清除：写入空串 = 显式停用（对默认槽即关闭该默认快捷键）
  *  - conflict：与其它槽位撞了同一组合 → 红色 ⚠
  *  - toolCombo：工具槽的按序默认组合（Ctrl+Alt+N）；录键覆盖即「自定义」
@@ -37,7 +37,7 @@ export function KeyCapture({ slotKey, dynMenus, fixMenus, conflict, toolCombo }:
       if (e.key === "Escape") { setRecording(false); setHint(""); return; }
       const combo = eventCombo(e);
       if (!combo) {
-        setHint("需含 Ctrl（如 Ctrl+K / Ctrl+Alt+Shift+P / Ctrl+1）");
+        setHint("请按有效键（如 K / F5 / 空格，或 带修饰键组合；Esc 取消）");
         return;
       }
       setRecording(false);
@@ -60,10 +60,10 @@ export function KeyCapture({ slotKey, dynMenus, fixMenus, conflict, toolCombo }:
           (recording ? " is-recording" : "") +
           (conflict ? " is-conflict" : "")
         }
-        title={recording ? "按下组合键（Esc 取消）" : "点击重新录制组合键"}
+        title={recording ? "按下任意键或组合键（Esc 取消）" : "点击重新录制快捷键"}
         onClick={() => { setRecording(true); setHint(""); }}
       >
-        {recording ? "按下组合键…" : (value || "未设置")}
+        {recording ? "按下任意键/组合键…" : (value || "未设置")}
       </button>
       {isDefault && value ? <em className="key-capture__default">默认</em> : null}
       {saved === "" ? <em className="key-capture__off">已停用</em> : null}

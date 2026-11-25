@@ -13,8 +13,9 @@
       fix:<菜单名>    第 N 个系统固定菜单栏
       nav:<n>         当前菜单栏下第 n 个导航项（n=1..9，1=首页）
       tool:<菜单>__<工具>  工具快捷键（工具名菜单内唯一）
-  - 组合串规范化格式：Ctrl[+Alt][+Shift]+<Key>
-      * 必须含 Ctrl（避免与中文输入法/普通输入冲突）
+      ball:show/hide  显示 / 隐藏 原生悬浮球（经 ball.set_hidden 命令；无默认组合）
+  - 组合串规范化格式：[Ctrl+][Alt+][Shift+]<Key>（任意键或组合，Ctrl 非必须；
+      须含至少一个普通键，避免与输入法/普通输入冲突；修饰键顺序固定 Ctrl<Alt<Shift）
       * Key ∈ A-Z / 0-9 / F1-F12 / Space
       * 空串 = 该槽位快捷键显式停用（区别于「未设置→用默认」）
   - 原子写：临时文件 + os.replace，防截断。
@@ -33,11 +34,12 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_FILE = _PROJECT_ROOT / "config" / "shortcuts.json"
 
-# 槽位键：panel / dyn:x / fix:x / nav:数字 / tool:菜单__工具
-_SLOT_RE = re.compile(r"^(panel|dyn:.+|fix:.+|nav:[0-9]+|tool:.+)$")
-# 组合串：Ctrl[+Alt][+Shift]+(F1-F12 | 单字母 | 数字 | Space)
+# 槽位键：panel / dyn:x / fix:x / nav:数字 / tool:菜单__工具 / ball:show|hide
+_SLOT_RE = re.compile(r"^(panel|dyn:.+|fix:.+|nav:[0-9]+|tool:.+|ball:(show|hide))$")
+# 组合串：[Ctrl+][Alt+][Shift+]+(F1-F12 | 单字母 | 数字 | Space)——任意键或组合
+# （Ctrl 非必须；须含普通键；修饰键顺序固定 Ctrl<Alt<Shift，与前端 eventCombo 归一化一致）
 _COMBO_RE = re.compile(
-    r"^Ctrl(\+Alt)?(\+Shift)?\+(F([1-9]|1[0-2])|[A-Z]|[0-9]|Space)$")
+    r"^(Ctrl\+)?(Alt\+)?(Shift\+)?(F([1-9]|1[0-2])|[A-Z]|[0-9]|Space)$")
 
 
 class ShortcutError(Exception):
@@ -87,7 +89,7 @@ def validate_shortcuts(shortcuts) -> None:
             raise ShortcutError("SHORTCUT_INVALID", f"非法槽位键：{k}")
         v = str(v)
         if v and not _COMBO_RE.match(v):
-            raise ShortcutError("SHORTCUT_INVALID", f"非法组合键：{v}（须 Ctrl[+Alt][+Shift]+字母/数字/F键/空格）")
+            raise ShortcutError("SHORTCUT_INVALID", f"非法组合键：{v}（须 [Ctrl+][Alt+][Shift+]+字母/数字/F键/空格，可省略修饰键）")
 
 
 def get_shortcuts() -> dict:

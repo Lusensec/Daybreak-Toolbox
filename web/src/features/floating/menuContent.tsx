@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Package, Plus, Loader2 } from "lucide-react";
 import { sendCommand } from "../../services/ws";
@@ -8,22 +8,29 @@ import { FIXED_MENUS } from "../menu/fixedMenus";
 import { useWheelScrollHorizontal } from "../../hooks/useWheelScroll";
 import { CtxMenu, ctxItemsFor, type CtxState } from "../../components/DynamicMenuNav";
 import { HomePage } from "../../pages/HomePage";
-import { ShellPanel } from "../shell/ShellPanel";
-import { AiChat } from "../ai/AiChat";
-import { CodecPanel } from "../codec/CodecPanel";
-import { TranslatePanel } from "../translate/TranslatePanel";
-import { NoteEditor } from "../note/NoteEditor";
 import "../../pages/ToolCanvas.css";
 
-/** 固定系统菜单 → 页面组件（与 App.tsx 路由表一一对应；全局单例状态多窗共享，用户已确认） */
-const FIXED_CONTENT: Record<string, () => React.ReactElement> = {
+/** 固定系统菜单 → 页面组件（与 App.tsx 路由表一一对应；全局单例状态多窗共享，用户已确认）。
+ *  非首页各页懒加载：与 App 路由复用同一 chunk，主包不携带各页面的私有依赖 */
+const AiChatLazy = lazy(() => import("../ai/AiChat").then((m) => ({ default: m.AiChat })));
+const TranslateLazy = lazy(() => import("../translate/TranslatePanel").then((m) => ({ default: m.TranslatePanel })));
+const CodecLazy = lazy(() => import("../codec/CodecPanel").then((m) => ({ default: m.CodecPanel })));
+const ShellLazy = lazy(() => import("../shell/ShellPanel").then((m) => ({ default: m.ShellPanel })));
+const NoteLazy = lazy(() => import("../note/NoteEditor").then((m) => ({ default: m.NoteEditor })));
+
+const FIXED_CONTENT: Record<string, React.ComponentType> = {
   首页: HomePage,
-  "AI 对话": AiChat,
-  汉英翻译: TranslatePanel,
-  编解码: CodecPanel,
-  终端管理: ShellPanel,
-  临时笔记: NoteEditor,
+  "AI 对话": AiChatLazy,
+  汉英翻译: TranslateLazy,
+  编解码: CodecLazy,
+  终端管理: ShellLazy,
+  临时笔记: NoteLazy,
 };
+
+/** 懒块占位（子窗口内）：加载完成前显示一行提示 */
+function ContentLoader() {
+  return <div className="tool-canvas__empty"><Loader2 size={16} className="spin" /> 加载页面中…</div>;
+}
 
 export function isFixedMenu(name: string): boolean {
   return FIXED_MENUS.includes(name);
@@ -35,10 +42,10 @@ export function menuDotColor(name: string): string {
   return m?.menu_color || "#2980b9";
 }
 
-/** 子窗口正文：固定菜单 → 页面组件；用户菜单 → 轻量工具浮层画布（不接主路由） */
+/** 子窗口正文：固定菜单 → 页面组件（Suspense 包懒块）；用户菜单 → 轻量工具浮层画布（不接主路由） */
 export function renderMenuContent(name: string): React.ReactNode {
   const C = FIXED_CONTENT[name];
-  if (C) return <C />;
+  if (C) return <Suspense fallback={<ContentLoader />}><C /></Suspense>;
   return <FloatingMenuCanvas menu={name} />;
 }
 
@@ -173,7 +180,7 @@ export function FloatingMenuCanvas({ menu }: { menu: string }) {
           >
             <Plus size={26} />
           </button>
-          <div className="tool-canvas__hint">工具存于 config/config.json（相对路径基于「{menu} / {nav}」目录）</div>
+          <div className="tool-canvas__hint">点击 ＋ 在「{menu} / {nav}」下添加工具</div>
         </div>
       ) : (
         <div className="tool-grid">

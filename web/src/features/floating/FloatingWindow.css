@@ -91,6 +91,31 @@
   background: rgba(255, 255, 255, 0.05);
 }
 
+/* 全屏按钮（⛶）：样式同关闭按钮，排在它左侧 */
+.float-window__full {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim, #8a919e);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.float-window__full:hover {
+  color: var(--accent, #f5a623);
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* 全屏态：铺满视口，直角更贴近「窗口最大化」观感 */
+.float-window.is-fs {
+  border-radius: 0;
+}
+
 .float-window__body {
   flex: 1 1 auto;
   overflow: auto;

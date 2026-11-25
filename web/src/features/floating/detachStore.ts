@@ -12,14 +12,22 @@ interface DetachState {
   zOrder: string[];
   /** 拖拽中「插入位」高亮的目标菜单名（被悬停的那一个），null = 无 */
   hoverTarget: string | null;
+  /** 全屏中的子窗口（铺满视口；纯 UI 态，刷新收回） */
+  fullscreen: Record<string, boolean>;
+  /** 进入全屏前的原尺寸（退出全屏时恢复） */
+  prevRects: Record<string, { x: number; y: number; w: number; h: number }>;
   open: (name: string, x: number, y: number) => void;
   close: (name: string) => void;
   move: (name: string, x: number, y: number) => void;
   /** 拉伸（右下角把手）：w/h 钳制在 [FLOAT_MIN, min(FLOAT_MAX, 视口)]，x/y 随新尺寸收拢 */
   resize: (name: string, w: number, h: number) => void;
+  /** 全屏开关：on 铺满视口（存原尺寸并置顶）；off 恢复原尺寸（经 clamp 收拢） */
+  setFullscreen: (name: string, on: boolean) => void;
+  /** 全屏中视口 resize 时重铺满（refit） */
+  refitFullscreen: (name: string) => void;
   focus: (name: string) => void;
   setHoverTarget: (name: string | null) => void;
-  /** 1000+ 层位：zOrder 中越靠后 z 越高 */
+  /** 2000+ 层位（>设置模态 1000、<悬浮球 2100）：zOrder 中越靠后 z 越高 */
   zIndexOf: (name: string) => number;
 }
 
@@ -45,6 +53,8 @@ export const useDetachStore = create<DetachState>((set, get) => ({
   detached: {},
   zOrder: [],
   hoverTarget: null,
+  fullscreen: {},
+  prevRects: {},
 
   open(name, x, y) {
     const s = get();
@@ -62,7 +72,11 @@ export const useDetachStore = create<DetachState>((set, get) => ({
     const s = get();
     const detached = { ...s.detached };
     delete detached[name];
-    set({ detached, zOrder: s.zOrder.filter((n) => n !== name) });
+    const fullscreen = { ...s.fullscreen };
+    delete fullscreen[name];
+    const prevRects = { ...s.prevRects };
+    delete prevRects[name];
+    set({ detached, fullscreen, prevRects, zOrder: s.zOrder.filter((n) => n !== name) });
   },
 
   move(name, x, y) {
@@ -84,6 +98,42 @@ export const useDetachStore = create<DetachState>((set, get) => ({
     set({ detached: { ...s.detached, [name]: { x: c.x, y: c.y, w: cw, h: ch } } });
   },
 
+  setFullscreen(name, on) {
+    const s = get();
+    const p = s.detached[name];
+    if (!p) return;
+    if (on) {
+      // 存原尺寸；铺满整个视口（0 边距）并置顶（多窗全屏时 zOrder 定叠放）
+      set({
+        fullscreen: { ...s.fullscreen, [name]: true },
+        prevRects: { ...s.prevRects, [name]: p },
+        detached: { ...s.detached, [name]: { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight } },
+        zOrder: [...s.zOrder.filter((n) => n !== name), name],
+      });
+      return;
+    }
+    // 退出：恢复原尺寸（经 clamp 收拢——期间视口可能已变小）
+    const prev = s.prevRects[name];
+    const detached = { ...s.detached };
+    if (prev) {
+      const c = clampFloatPos(prev.x, prev.y, prev.w, prev.h);
+      detached[name] = { x: c.x, y: c.y, w: prev.w, h: prev.h };
+    }
+    const fullscreen = { ...s.fullscreen };
+    delete fullscreen[name];
+    const prevRects = { ...s.prevRects };
+    delete prevRects[name];
+    set({ detached, fullscreen, prevRects });
+  },
+
+  refitFullscreen(name) {
+    const s = get();
+    if (!s.fullscreen[name] || !s.detached[name]) return;
+    set({
+      detached: { ...s.detached, [name]: { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight } },
+    });
+  },
+
   focus(name) {
     const s = get();
     if (!s.zOrder.includes(name) || s.zOrder[s.zOrder.length - 1] === name) return;
@@ -96,6 +146,7 @@ export const useDetachStore = create<DetachState>((set, get) => ({
 
   zIndexOf(name) {
     const i = get().zOrder.indexOf(name);
-    return 1000 + Math.max(0, i);
+    // 2000+ 层位：高于设置模态（z=1000）、低于悬浮球（z=2100）；zOrder 中越靠后 z 越高
+    return 2000 + Math.max(0, i);
   },
 }));

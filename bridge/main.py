@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -471,8 +472,8 @@ def _register_builtin_commands() -> None:
 
     async def _update_check(p, _ws):
         try:
-            repo = (p.get("repo") or "").strip() or get_repo()
-            return await asyncio.to_thread(check_update, repo)  # 阻塞 HTTP → worker 线程
+            # 仓库回退链在 service 内（入参 → 已存配置 → 内置 DEFAULT_REPO）；前端通常发空入参
+            return await asyncio.to_thread(check_update, (p.get("repo") or ""))  # 阻塞 HTTP → worker 线程
         except UpdateError as e:
             raise BridgeError(e.code, e.message)
 
@@ -535,7 +536,12 @@ def _register_builtin_commands() -> None:
         return r
 
     async def _ssh_connect(p, _ws):
-        r = _ssh_call(ssh_service.connect, str(p.get("alias", "")))
+        # 阻塞网络连接（至多 ~3×15s）→ worker 线程，避免卡死整个 WS 事件循环（同 shell.run 的处理）
+        alias = str(p.get("alias", ""))
+        try:
+            r = await asyncio.to_thread(ssh_service.connect, alias)
+        except ssh_service.SSHServiceError as e:
+            raise BridgeError(e.code, e.message)
         await _bus.broadcast("ssh.connected", r)
         return r
 
@@ -567,7 +573,16 @@ def _register_builtin_commands() -> None:
 
 
 def build_app() -> FastAPI:
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.0")
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        # uvicorn 事件循环 → 翻译 worker / 悬浮球状态钩子（跨线程广播依赖它）
+        # （原 @app.on_event("startup")，FastAPI 已弃用 → lifespan）
+        global _bridge_loop
+        _bridge_loop = asyncio.get_running_loop()
+        _ball.set_state_hook(lambda state: _thread_broadcast("ball.state", state))
+        yield
+
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.1", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -582,13 +597,6 @@ def build_app() -> FastAPI:
         if not _token_mod.validate(_extract_bearer(authorization)):
             return JSONResponse({"ok": False, "code": "TOKEN_INVALID"}, status_code=401)
         return {"ok": True, "echo": msg}
-
-    @app.on_event("startup")
-    async def _inject_loop():
-        # uvicorn 事件循环 → 翻译 worker / 悬浮球状态钩子（跨线程广播依赖它）
-        global _bridge_loop
-        _bridge_loop = asyncio.get_running_loop()
-        _ball.set_state_hook(lambda state: _thread_broadcast("ball.state", state))
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket, token: str = Query(default="")):
@@ -612,6 +620,7 @@ def build_app() -> FastAPI:
             pass
         finally:
             _bus._clients.pop(ws, None)
+            _bus.detach(ws)  # 停止该连接的 handler FIFO worker（在途任务取消，底层线程自行收尾）
 
     # ---- /api/token：prod（webview 同源）自动取 token，免去手动粘贴 ----
     @app.get("/api/token")

@@ -36,7 +36,6 @@
   object-fit: cover;
 }
 .menu-title { font-size: 14px; font-weight: bold; color: var(--text); }
-.menu-subtitle { font-size: 11px; color: var(--muted); }
 
 .menu-nav {
   display: flex;

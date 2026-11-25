@@ -7,9 +7,11 @@
  *   fix:<菜单名>     第 N 个系统固定菜单栏
  *   nav:<n>          当前菜单栏下第 n 个导航项（n=1..9，1=首页）
  *   tool:<菜单>__<工具>  工具快捷键
+ *   ball:show        悬浮球 显示/隐藏 切换（按当前状态 toggle；无默认组合，点击录制）
  *
- * 组合串规范化：Ctrl[+Alt][+Shift]+<Key>（mod 固定序 Ctrl<Alt<Shift；
- * Key ∈ A-Z / 0-9 / F1-F12 / Space）。必须含 Ctrl，避免与输入法/普通输入冲突。
+ * 组合串规范化：[Ctrl+][Alt+][Shift+]<Key>（修饰键固定序 Ctrl<Alt<Shift；
+ * 可全省略 → 单键也算组合，如 "K" / "F5"；Key ∈ A-Z / 0-9 / F1-F12 / Space）。
+ * Ctrl 非必须（如悬浮球显隐可绑单键）；须含至少一个普通键（纯修饰键不算）。
  */
 import { FIXED_MENUS } from "../menu/fixedMenus";
 
@@ -18,6 +20,8 @@ export const slotDyn = (menu: string) => `dyn:${menu}`;
 export const slotFix = (menu: string) => `fix:${menu}`;
 export const slotNav = (n: number) => `nav:${n}`;
 export const slotTool = (menu: string, tool: string) => `tool:${menu}__${tool}`;
+/** 悬浮球显隐切换槽位（按当前状态 显示↔隐藏；经 ball.get_state + ball.set_hidden 实现；无默认组合） */
+export const SLOT_BALL_SHOW = "ball:show";
 
 /** 固定菜单栏参与快捷键的菜单：「首页」不配快捷键（「回到面板」槽位即可到达，无需独占组合键）。
  *  默认编号按本列表 1..N 生成（AI 对话=Ctrl+Alt+1 … 临时笔记=Ctrl+Alt+5）。 */
@@ -66,8 +70,10 @@ export function effectiveCombo(
   return toolDefaultsMap?.[slotKey] ?? ""; // 工具槽：默认按列表顺序生成
 }
 
-/** 当前生效的全部槽位（面板 + 动态菜单 + 固定菜单[不含首页] + 导航 1..9 + 工具槽）。
- *  tools 传入时用「全部工具槽 + 默认组合」参与匹配；缺省仅已存工具槽（兼容旧调用）。 */
+/** 当前生效的全部槽位（面板 + 悬浮球显隐切换 + 动态菜单 + 固定菜单[不含首页] + 导航 1..9 + 工具槽）。
+ *  tools 传入时用「全部工具槽 + 默认组合」参与匹配；缺省仅已存工具槽（兼容旧调用）。
+ *  悬浮球槽（ball:show 显隐切换）无默认组合：仅当用户录制过（存表有值）才参与匹配。
+ *  旧表里的 ball:hide 条目不再参与匹配（惰性残留；下次整表保存时自然消失）。 */
 export function allSlots(
   map: Record<string, string>,
   dynMenus: string[],
@@ -79,6 +85,7 @@ export function allSlots(
     : Object.keys(map).filter((k) => k.startsWith("tool:"));
   return [
     SLOT_PANEL,
+    SLOT_BALL_SHOW,
     ...dynMenus.map(slotDyn),
     ...SHORTCUT_FIX_MENUS.map(slotFix), // 旧表里的 fix:首页 条目不再参与匹配/冲突检测（惰性残留，无害）
     ...Array.from({ length: 9 }, (_, i) => slotNav(i + 1)),
@@ -86,21 +93,21 @@ export function allSlots(
   ];
 }
 
-/** 键盘事件 → 组合串（不满足条件返回 null：无 Ctrl / 不支持的键）。
+/** 键盘事件 → 组合串（不满足条件返回 null：无普通键 / 不支持的键）。
+ *  任意键或组合均可（Ctrl 非必须，如单键 "K" / "F5"；修饰键顺序固定 Ctrl<Alt<Shift）。
  *  键位用 e.code 归一化（Shift+数字 时 e.key 会变成 !@#…，e.code 才是稳定语义）。 */
 export function eventCombo(e: KeyboardEvent): string | null {
-  if (!e.ctrlKey) return null;
-  const parts = ["Ctrl"];
-  if (e.altKey) parts.push("Alt");
-  if (e.shiftKey) parts.push("Shift");
+  const mods: string[] = [];
+  if (e.ctrlKey) mods.push("Ctrl");
+  if (e.altKey) mods.push("Alt");
+  if (e.shiftKey) mods.push("Shift");
   let key = "";
   if (e.code.startsWith("Digit")) key = e.code.slice(5);        // Digit1 → "1"（前缀 5 字符）
   else if (e.code.startsWith("Key")) key = e.code.slice(3);     // KeyZ → "Z"（前缀 3 字符）
   else if (e.code === "Space") key = "Space";
   else if (/^F\d{1,2}$/.test(e.code)) key = e.code;             // F1-F12
   else return null;                                             // 其余键（修饰键/符号/方向键…）不支持
-  parts.push(key);
-  return parts.join("+");
+  return [...mods, key].join("+");
 }
 
 /** 冲突检测：两个以上槽位生效同一组合 → 返回冲突槽位集合（tools 传入时工具默认组合也参与） */

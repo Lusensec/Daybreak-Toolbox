@@ -14,6 +14,10 @@ uploads/
 # 用户本地配置（含 API key / 凭证等敏感信息，不随仓库分发）
 config/ai.json
 config/bridge_secrets.json
+# SSH 主机表（config/ssh_hosts.json 内含明文 SSH 密码，严禁随仓库分发）
+config/ssh_hosts.json
+# 全局快捷键组合（个人偏好；缺省文件即用内置默认）
+config/shortcuts.json
 
 # Agnes 工作目录（含用户个人上传/截图，不随仓库分发）
 .agnes/

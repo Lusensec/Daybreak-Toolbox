@@ -96,10 +96,22 @@ class CheckUpdateTest(_IsolatedTestCase):
         self.assertFalse(r["has_update"])
         self.assertEqual(r["latest_version"], "weird-label")
 
-    def test_repo_required(self):
-        with self.assertRaises(us.UpdateError) as cm:
-            us.check_update("")
-        self.assertEqual(cm.exception.code, "UPDATE_NO_REPO")
+    def test_empty_repo_falls_back_to_default(self):
+        """未配置仓库（入参空 + config 空）→ 回退内置 DEFAULT_REPO（前端已无仓库配置 UI）。"""
+        release = {"tag_name": "v1.0.0", "html_url": "x"}
+        self._fake_http({us.DEFAULT_REPO: release})
+        r = us.check_update("")
+        self.assertEqual(r["repo"], us.DEFAULT_REPO)
+        self.assertFalse(r["has_update"])
+
+    def test_saved_config_repo_wins_over_default(self):
+        """已存配置（config/update.json）优先于内置默认。"""
+        us.save_repo("owner/repo")
+        release = {"tag_name": "v9.9.9"}
+        self._fake_http({"owner/repo": release})
+        r = us.check_update("")
+        self.assertEqual(r["repo"], "owner/repo")
+        self.assertTrue(r["has_update"])
 
     def test_404_gives_fetch_error(self):
         self._fake_http({})  # 仓库不在表里 → 404

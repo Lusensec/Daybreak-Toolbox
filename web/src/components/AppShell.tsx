@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation } from "react-router";
 import { Moon, Sun, Wifi, WifiOff, Settings, Monitor } from "lucide-react";
 import { useTheme } from "../theme/ThemeProvider";
 import type { ThemeChoice } from "../theme/ThemeProvider";
 import { connectBridge, disconnectBridge, useConnStore, sendCommand, fetchBridgeToken } from "../services/ws";
-import { SettingsModal } from "./SettingsModal";
 import { DynamicMenuNav, NavBarRow, CtxMenu } from "./DynamicMenuNav";
 import type { CtxState } from "./DynamicMenuNav";
 import { ToastHost, useToast } from "./toast";
+import { PromptDialogHost } from "./PromptDialog";
 import { useSettingsModal } from "../store/settingsModal";
 import { bindMenuEvents, useMenuStore, isFixedVisible } from "../features/menu/store";
 import { useWheelScrollHorizontal } from "../hooks/useWheelScroll";
@@ -28,6 +28,9 @@ const NAV = [
   { to: "/translate", label: "汉英翻译" },
   { to: "/note", label: "临时笔记" },
 ];
+
+/** 工具箱设置模态框懒加载（设置 UI 较重：10 个标签页 + 表单/列表；仅在打开时才需要） */
+const SettingsModalLazy = lazy(() => import("./SettingsModal").then((m) => ({ default: m.SettingsModal })));
 
 // bridge 自托管生产模式：同源部署（pnpm build 后由 python -m bridge.main 托管）。
 // 此模式下自动取 /api/token 并连接，隐藏 dev 桥接 dock。
@@ -191,7 +194,6 @@ export default function AppShell() {
         <div className="menu-brand">
           <img className="menu-brand__logo" src="/logo.png" alt="破晓·工具箱" />
           <span className="menu-title">破晓·工具箱</span>
-          <span className="menu-subtitle">Daybreak Toolbox · Web</span>
         </div>
         <nav className="menu-nav" ref={menuNavRef}>
           {/* 顺序：首页 → 动态加载的用户菜单 → 固定功能面板（均按 菜单栏展示 参数 1/0 显隐；可拖出顶栏脱离为子窗口） */}
@@ -323,10 +325,17 @@ export default function AppShell() {
       <GlobalShortcuts />
 
       {/* 工具箱设置：右侧按钮 / 首页卡 → 模态框操作（通用 / 菜单管理 / 工具管理 / AI 模型设置） */}
-      <SettingsModal open={settingsOpen} onClose={closeModal} />
+      {settingsOpen ? (
+        <Suspense fallback={null}>
+          <SettingsModalLazy open={settingsOpen} onClose={closeModal} />
+        </Suspense>
+      ) : null}
 
       {/* 全局消息提醒：右上角提示框（高于模态框） */}
       <ToastHost />
+
+      {/* 全局重命名对话框（替代 window.prompt；顶栏右键 / 设置页 / 子窗口 共用） */}
+      <PromptDialogHost />
     </div>
   );
 }

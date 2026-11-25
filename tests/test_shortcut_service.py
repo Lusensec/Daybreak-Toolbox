@@ -20,7 +20,8 @@ def test_get_missing_file_returns_empty():
 
 def test_set_and_get_roundtrip():
     data = {"panel": "Ctrl+Space", "dyn:红队": "Ctrl+1", "fix:首页": "Ctrl+Alt+1",
-            "nav:1": "Ctrl+Shift+1", "tool:红队__扫描器": "Ctrl+Shift+P", "dyn:蓝队": ""}
+            "nav:1": "Ctrl+Shift+1", "tool:红队__扫描器": "Ctrl+Shift+P", "dyn:蓝队": "",
+            "ball:show": "Ctrl+Shift+X", "ball:hide": ""}
     r = set_shortcuts(data)
     assert r["ok"] is True
     assert r["shortcuts"] == data
@@ -30,6 +31,15 @@ def test_set_and_get_roundtrip():
     assert ondisk == data
 
 
+def test_ball_slot_keys():
+    # ball:show / ball:hide 合法（含空串停用）；其它 ball:xxx 与裸 ball 拒绝
+    assert set_shortcuts({"ball:show": "Ctrl+Shift+Y", "ball:hide": ""})["ok"] is True
+    for bad in ("ball:xxx", "ball", "ball:show:extra"):
+        with pytest.raises(ShortcutError) as ei:
+            set_shortcuts({bad: "Ctrl+1"})
+        assert ei.value.code == "SHORTCUT_INVALID"
+
+
 def test_invalid_slot_key_rejected():
     with pytest.raises(ShortcutError) as ei:
         set_shortcuts({"foo:bar": "Ctrl+1"})
@@ -37,8 +47,9 @@ def test_invalid_slot_key_rejected():
 
 
 def test_invalid_combo_rejected():
-    for bad in ("A", "Ctrl", "Shift+K", "Alt+1", "Ctrl+Alt+Shift+Meta",
-                "ctrl+1", "Ctrl+ctrl+A", "Ctrl+F13", "Ctrl+!"):
+    # 纯修饰键 / 顺序错误 / 小写 / 非法键 / 不支持的键 仍拒绝
+    for bad in ("Ctrl", "Alt", "Shift", "Ctrl+Alt", "Ctrl+", "ctrl+1",
+                "Ctrl+ctrl+A", "Ctrl+F13", "Ctrl+!", "Shift+Ctrl+K", "F13", "A B"):
         with pytest.raises(ShortcutError):
             set_shortcuts({"panel": bad})
     # 空串（显式停用）合法
@@ -46,8 +57,10 @@ def test_invalid_combo_rejected():
 
 
 def test_valid_combo_variants_accepted():
+    # 任意键或组合（Ctrl 非必须；修饰键顺序固定 Ctrl<Alt<Shift）
     for good in ("Ctrl+Space", "Ctrl+1", "Ctrl+Alt+K", "Ctrl+Shift+9",
-                 "Ctrl+Alt+Shift+F5", "Ctrl+A"):
+                 "Ctrl+Alt+Shift+F5", "Ctrl+A",
+                 "K", "F5", "Space", "1", "Shift+K", "Alt+1", "Alt+Shift+P"):
         assert set_shortcuts({"panel": good})["ok"] is True
 
 
