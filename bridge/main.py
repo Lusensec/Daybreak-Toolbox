@@ -582,7 +582,7 @@ def build_app() -> FastAPI:
         _ball.set_state_hook(lambda state: _thread_broadcast("ball.state", state))
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.1", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.2", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -717,6 +717,19 @@ def main() -> None:
         srv.join(0.1)
     print(f"[bridge] listening on 127.0.0.1:{port}")
     print(f"[bridge] token: {_token_mod.get_token()}")
+    print(f"[bridge] 界面地址 http://127.0.0.1:{port}/ （托盘「打开首页」/ 浏览器手动访问亦可）")
+
+    # 打包版（frozen）启动后自动打开浏览器界面；开发态不弹，避免打扰
+    if getattr(sys, "frozen", False):
+        import webbrowser as _webbrowser
+
+        def _auto_open() -> None:
+            try:
+                _webbrowser.open(f"http://127.0.0.1:{port}/")
+            except Exception as e:  # headless / 无默认浏览器等
+                print(f"[bridge] 自动打开浏览器失败（请手动访问 http://127.0.0.1:{port}/）: {e}")
+
+        _threading.Timer(1.2, _auto_open).start()
 
     # 原生悬浮球：可用时主线程跑 GUI 泵（pywebview 要求 webview.start() 在主线程）
     _pr = _project_root()

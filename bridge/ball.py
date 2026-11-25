@@ -303,6 +303,7 @@ def _gradient_pixels(d: int) -> bytes:
     return bytes(data)
 
 
+_warned_win32gui = False  # win32gui 缺失只提示一次（回退 ctypes 后不再逐帧刷日志）
 _GEN_BAD_STREAK = 0  # 连续「首刷失败/表面不可见」代数上限保护
 _BALL_CLASS_PROC = None
 
@@ -664,7 +665,10 @@ class _NativeBall:
                                          int(hdc), (0, 0), 0, None, 0)
             return True
         except Exception as e:
-            log.warning("win32gui.UpdateLayeredWindow failed: %s", e)
+            global _warned_win32gui
+            if not _warned_win32gui:  # 回退 ctypes 后不再逐帧刷日志
+                log.warning("win32gui.UpdateLayeredWindow failed（回退 ctypes，后续不再提示）: %s", e)
+                _warned_win32gui = True
         ret = _u32_le.UpdateLayeredWindow(self.hwnd, 0, ctypes.byref(wintypes.POINT(x, y)),
                                           ctypes.byref(wintypes.SIZE(w, h)),
                                           hdc, ctypes.byref(wintypes.POINT(0, 0)), 0, None, 0)
@@ -1069,6 +1073,15 @@ def _ball_thread_main() -> None:
         st["hidden"] = bool(p.get("hidden", False))
     except Exception:
         st["topmost"], st["hidden"] = True, False
+    # 位置越界钳制：旧配置 / 换屏 / DPI 变化后，落点不在主屏工作区内则拉回右下角默认位
+    # （与 _new_window 的默认落点一致），避免球画到屏外「看不见」
+    if st["x"] is not None and st["y"] is not None:
+        s = st["scale"]
+        wl, wt, ww, wh = _work_area()
+        b = int(_CLOSED_H * s)
+        if st["x"] < wl or st["y"] < wt or st["x"] > wl + ww - b or st["y"] > wt + wh - b:
+            st["x"] = wl + max(0, ww - b - int(24 * s))
+            st["y"] = wt + max(0, wh - b - int(80 * s))
     _NativeBall(st).run()
 
 

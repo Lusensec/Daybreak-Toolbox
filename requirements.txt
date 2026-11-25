@@ -11,3 +11,5 @@ zhipuai
 pystray
 pywebview
 Pillow
+# Windows 悬浮球原生渲染（pywin32 仅 Windows 安装；CI 各平台 runner 按标记处理）
+pywin32; sys_platform == "win32"
