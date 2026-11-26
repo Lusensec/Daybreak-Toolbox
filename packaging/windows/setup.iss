@@ -9,7 +9,8 @@
 
 #define AppVersion "v2.0.9"   ; 资产文件名用（/D:AppVersion= 覆盖）
 #define AppVerNum  "2.0.9"   ; Setup 版本号（无 v 前缀，/D:AppVerNum= 覆盖）
-#define ExePath    "dist\DaybreakToolbox.exe"  ; onefile 产物（/D:ExePath= 覆盖）
+; 相对路径基于脚本目录（packaging/windows/）解析
+#define ExePath    "..\..\dist\DaybreakToolbox.exe"  ; onefile 产物
 
 [Setup]
 AppId={{9C7D5E2A-4B1F-4C6E-8A3D-B2E7F05A1C48}}
