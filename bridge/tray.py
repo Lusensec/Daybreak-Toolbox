@@ -34,15 +34,20 @@ def _make_icon_image(root: "object" = None):
     from PIL import Image, ImageDraw
 
     # 1) 真 logo
+    cands = []
     if root is not None:
-        for rel in ("web/public/logo.png", "web/dist/logo.png"):
-            p = Path(root) / rel
-            if p.is_file():
-                try:
-                    im = Image.open(p).convert("RGBA").resize((48, 48), Image.LANCZOS)
-                    return im
-                except Exception:
-                    break
+        cands += [Path(root) / rel for rel in ("web/public/logo.png", "web/dist/logo.png")]
+    # frozen（打包 exe）：web 资产在 _MEIPASS/dist/（add-data web/dist;dist）
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cands.append(Path(meipass) / "dist" / "logo.png")
+    for p in cands:
+        if p.is_file():
+            try:
+                im = Image.open(p).convert("RGBA").resize((48, 48), Image.LANCZOS)
+                return im
+            except Exception:
+                break
 
     # 2) 兜底：64×64 破晓图标（深蓝夜 → 橙色地平线的日出渐变 + 白色太阳弧）
     size = 64

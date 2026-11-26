@@ -18,6 +18,7 @@ pnpm build            # 在 web/ 目录（或 pnpm --filter web build）
 python -m PyInstaller --onefile --noconsole --name DaybreakToolbox --noconfirm \
     --exclude-module keyring \
     --collect-all pythonnet --collect-all clr_loader --hidden-import clr \
+    --icon packaging\daybreak_logo.ico \
     --add-data "web/dist;dist" --add-data "config;config" \
     --add-data "<site-packages>/webview/lib/Microsoft.Web.WebView2.Core.dll;." \
     --add-data "<site-packages>/webview/lib/Microsoft.Web.WebView2.WinForms.dll;." \
@@ -25,6 +26,11 @@ python -m PyInstaller --onefile --noconsole --name DaybreakToolbox --noconfirm \
     --add-data "<site-packages>/webview/lib/runtimes/win-x64/native/WebView2Loader.dll;." \
     run_bridge.py
 ```
+
+- `--icon`（v2.0.4 起）：图标文件为 `packaging/daybreak_logo.ico`（多尺寸 16-256，源自 `web/public/logo.png`）。
+  Logo 更新后重新生成 ico（PIL 一行）：
+  `python -c "from PIL import Image; Image.open('web/public/logo.png').convert('RGBA').save('packaging/daybreak_logo.ico', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])"`
+  该图标同时决定 exe 文件图标、窗口标题栏与任务栏图标（WinForms 窗口默认继承进程 exe 图标）。
 
 - 窗口模式（v2.0.3 起 exe 默认弹原生窗口）依赖 pywebview/pythonnet 与上述 WebView2 interop DLL（onefile 下必须平铺到打包根目录；
   缺任一项时窗口不可用 → 自动降级「服务 + 默认浏览器」，其余功能不受影响）。

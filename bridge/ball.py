@@ -258,8 +258,12 @@ def _ball_image(root: Path, d: int):
 
 
 def _ball_image_uncached(root: Path, d: int):
-    for rel in ("web/public/logo.png", "web/dist/logo.png"):
-        p = Path(root) / rel
+    # 候选：开发态/项目根下的真 logo；frozen（打包 exe）时 web 资产在 _MEIPASS/dist/（add-data web/dist;dist）
+    cands = [Path(root) / rel for rel in ("web/public/logo.png", "web/dist/logo.png")]
+    _meipass = getattr(sys, "_MEIPASS", None)
+    if _meipass:
+        cands.append(Path(_meipass) / "dist" / "logo.png")
+    for p in cands:
         if not p.is_file():
             continue
         try:
@@ -280,7 +284,7 @@ def _ball_image_uncached(root: Path, d: int):
                     data[o:o + 4] = struct.pack("BBBB", rr, gg, bb, min(aa, mask))
             return (d, data)
         except Exception as e:
-            log.warning("ball logo load failed (%s): %s", rel, e)
+            log.warning("ball logo load failed (%s): %s", p, e)
     return None  # 缓存由调用方 _ball_image 统一写入
 
 

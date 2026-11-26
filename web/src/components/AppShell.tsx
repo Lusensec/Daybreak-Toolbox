@@ -88,7 +88,7 @@ function FixedNavButton({ to, label, end, barRef, onCtx }: {
 }
 
 export default function AppShell() {
-  const { theme, set } = useTheme();
+  const { theme, set, isDark } = useTheme();
   const conn = useConnStore((s) => s.status);
   const lastError = useConnStore((s) => s.lastError);
   const [token, setToken] = useState(() => localStorage.getItem("daybreak.token") ?? "");
@@ -192,7 +192,7 @@ export default function AppShell() {
     <div className="app-shell">
       <header className="menu-bar" ref={topBarRef}>
         <div className="menu-brand">
-          <img className="menu-brand__logo" src="/logo.png" alt="破晓·工具箱" />
+          <img className="menu-brand__logo" src={isDark ? "/logo.png" : "/logo-light.png"} alt="破晓·工具箱" />
           <span className="menu-title">破晓·工具箱</span>
         </div>
         <nav className="menu-nav" ref={menuNavRef}>

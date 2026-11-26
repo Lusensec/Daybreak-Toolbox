@@ -24,18 +24,22 @@ jobs:
             artifact-suffix: win-x64
             pyinstaller: --onefile --noconsole
             add-data-sep: ";"
+            icon: packaging/daybreak_logo.ico
           - os: macos-latest
             artifact-suffix: mac-arm64
             pyinstaller: --onefile --windowed
             add-data-sep: ":"
+            icon: ""
           - os: macos-15
             artifact-suffix: mac-x64
             pyinstaller: --onefile --windowed
             add-data-sep: ":"
+            icon: ""
           - os: ubuntu-24.04
             artifact-suffix: linux-x64
             pyinstaller: --onefile
             add-data-sep: ":"
+            icon: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +79,10 @@ jobs:
             extra_flags="$extra_flags --add-data $webview_lib/lib/runtimes/win-x64/native/WebView2Loader.dll${sep}."
             extra_flags="$extra_flags --add-data $webview_lib/lib/runtimes/win-x64${sep}win-x64"
           fi
+          icon_flag=""
+          if [ -n "${{ matrix.icon }}" ]; then
+            icon_flag="--icon ${{ matrix.icon }}"
+          fi
           pyinstaller --name DaybreakToolbox --clean --noconfirm \
             --exclude-module keyring \
             --exclude-module transformers --exclude-module torch \
@@ -83,6 +91,7 @@ jobs:
             --collect-all pythonnet --collect-all clr_loader --hidden-import clr \
             --add-data "web/dist${sep}dist" --add-data "config${sep}config" \
             $extra_flags \
+            $icon_flag \
             ${{ matrix.pyinstaller }} run_bridge.py
           echo "build done: $(ls dist | head -5 | tr '\n' ' ')"
 

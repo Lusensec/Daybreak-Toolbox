@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,12 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.4":
+"""
+1、Windows 图标修复：exe 文件图标 / 窗口标题栏 / 任务栏 / 资源管理器均换成「破晓」系统 Logo（此前为 Python 打包默认图像）
+2、浅色模式 Logo 统一：顶栏左上角 Logo 与浏览器标签 favicon 在浅色主题下改用浅色 Logo（深色主题沿用深色 Logo，与悬浮球一致）
+3、修复打包版悬浮球 / 托盘在 zip 目录运行时显示手绘兜底图标的问题：改为读取内置真 Logo
+""",
     "v2.0.3":
 """
 1、新增窗口形态（Windows 打包默认）：双击 exe 直接弹出原生应用窗口（WebView2 渲染，与浏览器界面同款），关闭窗口即退出；托盘 / 悬浮球与窗口共存

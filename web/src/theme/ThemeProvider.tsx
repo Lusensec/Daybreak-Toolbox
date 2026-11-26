@@ -50,6 +50,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.dataset.theme = isDark ? "dark" : "light";
+    // favicon 跟随主题：浅色用浅色 Logo（favicon-light.png），深色用深色 Logo
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (link) link.href = isDark ? "/favicon.png" : "/favicon-light.png";
     try { localStorage.setItem(LS_KEY, choice); } catch { /* ignore */ }
   }, [isDark, choice]);
 
