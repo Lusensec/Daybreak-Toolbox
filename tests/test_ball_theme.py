@@ -1,8 +1,8 @@
 """ball：系统主题检测 / 球体图像候选链（纯逻辑部分，monkeypatch 可测）。
 
-覆盖 v2.0.5 新增：
+覆盖 v2.0.5 新增 + v2.0.6 候选链重排：
 - _system_light_theme：AppsUseLightTheme=1 → 浅色；键缺失（OSError）→ 深色
-- _ball_logo_files：浅色优先 ball-light.png（legacy logo.png 兜底在列）；深色同理
+- _ball_logo_files：v2.0.6 完整 Logo 徽标优先（浅色 logo-light / 深色 logo），简化球图标兜底在列
 """
 import winreg
 
@@ -43,12 +43,13 @@ def test_system_light_theme_missing_keys_defaults_dark(monkeypatch):
 
 
 def test_ball_logo_files_theme_order():
-    """浅色：ball-light.png 优先，legacy logo.png 兜底在列；深色：ball-dark.png 优先。"""
+    """v2.0.6：完整 Logo 徽标优先（浅色 logo-light / 深色 logo），简化球图标降为兜底。"""
     from pathlib import Path
 
     light = [p.name for p in ball._ball_logo_files(Path("C:/x"), True)]
     dark = [p.name for p in ball._ball_logo_files(Path("C:/x"), False)]
-    assert light[0] == "ball-light.png"
+    assert light[0] == "logo-light.png"
+    assert "ball-light.png" in light  # 简化球兜底仍在链内
     assert "logo.png" in light
-    assert dark[0] == "ball-dark.png"
-    assert "logo.png" in dark
+    assert dark[0] == "logo.png"
+    assert "ball-dark.png" in dark

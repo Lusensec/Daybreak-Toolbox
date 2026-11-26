@@ -14,7 +14,6 @@ import { useWheelScrollHorizontal } from "../hooks/useWheelScroll";
 import { useDetachStore } from "../features/floating/detachStore";
 import { useDetachDrag } from "../features/floating/useDetachDrag";
 import { FloatingWindowHost } from "../features/floating/FloatingWindow";
-import { FloatBall } from "../features/floating/FloatBall";
 import { GlobalShortcuts } from "../features/shortcuts/GlobalShortcuts";
 import { bindShortcutEvents } from "../features/shortcuts/store";
 import { bindSshEvents } from "../features/ssh/store";
@@ -317,9 +316,6 @@ export default function AppShell() {
 
       {/* 菜单栏拖出脱离的子窗口（浮动层，纯 UI 状态；刷新全部收回栏内） */}
       <FloatingWindowHost />
-
-      {/* 页面内悬浮球（快捷面板：页面/工具快启/子窗口；位置持久化） */}
-      <FloatBall />
 
       {/* 全局快捷键监听（panel / 动态菜单 / 固定菜单 / 导航 / 工具；渲染 null） */}
       <GlobalShortcuts />

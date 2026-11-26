@@ -153,6 +153,10 @@ _user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_in
 _user32.GetWindowTextW.restype = ctypes.c_int
 _user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
 _user32.IsWindowVisible.restype = ctypes.c_int
+_user32.keybd_event.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
+_user32.keybd_event.restype = None
+_user32.BringWindowToTop.argtypes = [ctypes.c_void_p]
+_user32.BringWindowToTop.restype = ctypes.c_int
 _gdi32.CreateEllipticRgn.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
 _gdi32.CreateEllipticRgn.restype = ctypes.c_void_p
 _gdi32.CreateRectRgn.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
@@ -208,7 +212,7 @@ _WM_TOPMOST, _WM_HIDDEN, _WM_CLOSED_REQUEST, _WM_RECREATE = (_WM_APP + 1, _WM_AP
 _SW_HIDE, _SW_SHOW, _SW_MINIMIZE, _SW_RESTORE = 0, 5, 6, 9
 _HWND_TOPMOST, _HWND_NOTOPMOST = -1, -2
 _SWP_NOSIZE, _SWP_NOMOVE, _SWP_NOZORDER, _SWP_NOACTIVATE = 0x0001, 0x0002, 0x0004, 0x0010
-_WS_EX_LAYERED, _WS_EX_TOOLWINDOW = 0x00080000, 0x00000080
+_WS_EX_LAYERED, _WS_EX_TOOLWINDOW, _WS_EX_NOACTIVATE = 0x00080000, 0x00000080, 0x08000000
 _ULW_ALPHA = 0x0002
 _TRANSPARENT_BK = 1
 
@@ -296,18 +300,26 @@ def _system_light_theme() -> bool:
 
 
 def _ball_logo_files(root: Path, light: bool) -> "list[Path]":
-    """球体图像候选链：简化球图标（球专用，深浅两版）→ 旧 logo 徽标 → 调用方渐变兜底。
+    """球体图像候选链（v2.0.6）：**完整 Logo 徽标优先**（浅色 logo-light / 深色 logo，
+    用户选定外观）→ v2.0.5 简化球图标兜底 → 调用方渐变兜底。
     frozen（打包 exe）：web 资产在 _MEIPASS/dist/（add-data web/dist;dist）。"""
-    name = "ball-light.png" if light else "ball-dark.png"
+    name = "logo-light.png" if light else "logo.png"
+    alt = "ball-light.png" if light else "ball-dark.png"
     cands = [
         Path(root) / "web" / "public" / name,
         Path(root) / "web" / "dist" / name,
+        Path(root) / "web" / "public" / alt,
+        Path(root) / "web" / "dist" / alt,
         Path(root) / "web" / "public" / "logo.png",
         Path(root) / "web" / "dist" / "logo.png",
     ]
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        cands += [Path(meipass) / "dist" / name, Path(meipass) / "dist" / "logo.png"]
+        cands += [
+            Path(meipass) / "dist" / name,
+            Path(meipass) / "dist" / alt,
+            Path(meipass) / "dist" / "logo.png",
+        ]
     return cands
 
 
@@ -783,7 +795,7 @@ class _NativeBall:
         if atom == 0:
             log.warning("ball RegisterClassExW err=%s (复用已注册类)", ctypes.get_last_error())
 
-        ex = _WS_EX_LAYERED | _WS_EX_TOOLWINDOW
+        ex = _WS_EX_LAYERED | _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE
         W = int(_MW * s)
         H = int((_OPEN_H if self.menu_open else _CLOSED_H) * s)
         ox, oy = self._origin()
@@ -945,16 +957,19 @@ class _NativeBall:
         return found[0] if found else None
 
     def _left_click_action(self) -> None:
-        """左键单击：窗口形态 → 聚焦/还原主窗口；服务形态（无主窗口）→ 默认浏览器。"""
+        """左键单击：窗口形态 → 聚焦/还原主窗口；服务形态（无主窗口）→ 默认浏览器。
+        球窗口为 WS_EX_NOACTIVATE（不抢焦点）；跨进程置前被前台锁挡时，
+        合成一次 Alt 键按下（Windows 据此把本进程视为输入源、授予置前权）再置前。"""
         st = self.st
         hwnd = self._find_main_window()
         if hwnd:
             _user32.ShowWindow(hwnd, _SW_RESTORE)
-            if not _user32.SetForegroundWindow(hwnd):
-                # 前台锁限制：最小化→还原 破锁后再次置前
-                _user32.ShowWindow(hwnd, _SW_MINIMIZE)
-                _user32.ShowWindow(hwnd, _SW_RESTORE)
-                _user32.SetForegroundWindow(hwnd)
+            if not _user32.SetForegroundWindow(hwnd) and _user32.GetForegroundWindow() != hwnd:
+                # 前台锁兜底：合成 Alt 按住期间调用置前（Windows 把持 Alt 的进程视为输入源、授予置前权）
+                _user32.keybd_event(0x12, 0, 0, None)  # Alt 按下
+                _user32.BringWindowToTop(hwnd)
+                _user32.SetForegroundWindow(hwnd)  # 必须在 Alt 抬起前
+                _user32.keybd_event(0x12, 0, 0x2, None)  # Alt 抬起 (KEYEVENTF_KEYUP)
             return
         try:
             webbrowser.open(f"http://127.0.0.1:{st.get('port', 8765)}/")

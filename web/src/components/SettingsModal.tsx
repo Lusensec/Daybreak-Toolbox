@@ -1431,7 +1431,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="settings-display">
               <h3 className="settings-sub__title">其他设置 <span className="settings-sub__hint">（基础设置集合，后续更多基础设置将归入此处）</span></h3>
 
-              <h3 className="settings-sub__title">悬浮球 <span className="settings-sub__hint">（页面内小球随时可用；原生置顶小球由 bridge 进程运行，可最小化共存）</span></h3>
+              <h3 className="settings-sub__title">悬浮球 <span className="settings-sub__hint">（全局置顶球由 bridge 进程运行，可拖动到屏幕任意位置、位置记忆；v2.0.6 起页内小球已移除，屏幕上仅此一颗）</span></h3>
 
               {!ballAvail ? (
                 <div className="menu-list__empty">原生悬浮球当前不可用（bridge 未运行 / 依赖缺失），设置保存后 bridge 重启时生效。</div>

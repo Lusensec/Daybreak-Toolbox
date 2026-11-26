@@ -584,7 +584,7 @@ def build_app() -> FastAPI:
         _ball.set_state_hook(lambda state: _thread_broadcast("ball.state", state))
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.5", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.6", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
