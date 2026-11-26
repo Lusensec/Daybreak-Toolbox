@@ -208,9 +208,9 @@
 }
 .settings-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-/* ---- 自定义窗口控件（v2.0.8 起窗口形态为无边框：原生标题栏移除，窗口操作在顶栏 + 右下角）----
-   .win-ctrl      最大化/还原、关闭 X（32×30，与主题切换按钮同规格）
-   .win-resize    右下角拉伸手柄（nwse-resize 光标 + 细斜纹，仅无边框窗口形态显示）
+/* ---- 自定义窗口控件（v2.0.8 起窗口形态为无边框：原生标题栏移除，窗口操作在顶栏 + 全边缘）----
+   .win-ctrl      最小化(—)/最大化(⤢·还原叠方)/关闭 X（v2.0.10 图标修正）（32×30）
+   .win-resize    右下角拉伸区（v2.0.10 全边缘 .win-edge-*：左/右/下边缘 6px + 左下/右下角 14px，替代 v2.0.8 单一右下角手柄）
    .menu-bar      顶栏本身为拖移区（品牌区/栏间隙可拖；按钮/链接/输入控件除外，JS 判定）
    浏览器/服务形态（app.env.windowed=false）不渲染以上控件，顶栏保持原样 */
 .menu-bar { user-select: none; -webkit-user-select: none; }
@@ -230,18 +230,32 @@
   background: #d13438;          /* Windows 标题栏关闭按钮同款红 */
   border-color: #d13438;
 }
-.win-resize {
+/* 全边缘拉伸区（v2.0.10）：左/右/下缘 6px 隐形热区 + 左下/右下角 14px（细斜纹视觉提示）
+   顶缘不做（顶栏是拖移区）；z-index 3500 < 模态层 4000+ → 打开弹窗时边缘自然不可拉伸 */
+.win-edge {
   position: fixed;
-  right: 0; bottom: 0;
-  width: 14px; height: 14px;
-  cursor: nwse-resize;
-  z-index: 3500;                 /* 高于状态栏/内容，低于弹窗(3000+ 重命名/3500 提示)不影响 */
+  z-index: 3500;
   pointer-events: auto;
+  user-select: none;
+}
+.win-edge--left   { left: 0; top: 48px; bottom: 0; width: 6px; cursor: ew-resize; }
+.win-edge--right  { right: 0; top: 48px; bottom: 0; width: 6px; cursor: ew-resize; }
+.win-edge--bottom { left: 14px; right: 14px; bottom: 0; height: 6px; cursor: ns-resize; }
+.win-edge--bl,
+.win-edge--br {
+  width: 14px; height: 14px;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+.win-edge--bl { left: 0; }
+.win-edge--br {
+  right: 0;
   background:
     linear-gradient(135deg, transparent 0 50%, var(--border) 50% 58%, transparent 58% 74%, var(--border) 74% 82%, transparent 82%);
   opacity: 0.9;
 }
-.win-resize:hover { background: linear-gradient(135deg, transparent 0 50%, var(--accent) 50% 58%, transparent 58% 74%, var(--accent) 74% 82%, transparent 82%); }
+.win-edge--br:hover { background: linear-gradient(135deg, transparent 0 50%, var(--accent) 50% 58%, transparent 58% 74%, var(--accent) 74% 82%, transparent 82%); }
+.win-edge--bl:hover { background: linear-gradient(45deg, transparent 0 50%, var(--accent) 50% 58%, transparent 58% 74%, var(--accent) 74% 82%, transparent 82%); opacity: 0.9; }
 
 /* ---- 主内容区 ---- */
 .content {

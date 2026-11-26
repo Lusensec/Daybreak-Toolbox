@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.9"
+APP_VERSION = "2.0.10"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,12 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.10":
+"""
+1、最大化/还原改为几何驱动（幂等自愈）：不再依赖状态标志——页面重载、任务栏最小化往返、最大化中手动改大小后，按钮依旧可靠（v2.0.9 起第二次点击失效的根因）
+2、最小化按钮图标修正为「—」（原斜箭图标易误认为放大）；最大化=⤢、还原=叠方
+3、窗口边缘全向拉伸：左/右/下边缘任意位置 + 左下/右下角均可拖动调整大小（原仅右下角）；最大化中拖边缘自动还原后拉伸；最小 960×600 双保险钳制
+""",
     "v2.0.9":
 """
 1、Windows 安装程序（Inno Setup）：Release 新增 win-setup.exe 资产，安装时可自选路径（默认 %LOCALAPPDATA%\\DaybreakToolbox 免管理员），含 开始菜单/桌面快捷方式、卸载项、装后可选立即运行；原 zip 绿色版保留

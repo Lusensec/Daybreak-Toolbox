@@ -54,9 +54,23 @@ def test_clamp_window_size_min():
 
 
 def test_max_state_default():
-    """最大化状态机默认值（未最大化、无保存几何；几何由 toggle_maximize 自行记忆）。"""
-    assert bmain._MAX_STATE["maximized"] is False
-    assert bmain._MAX_STATE["saved"] is None
+    """最大化状态缓存默认值（win32 几何驱动只用 saved 缓存；mac/linux 标志位配对）。"""
+    assert bmain._MAX_STATE.get("maximized") in (False, None)
+    assert bmain._MAX_STATE.get("saved") is None
+
+
+def test_is_maximized_geometry():
+    """几何判定（v2.10 幂等自愈的核心）：±8 逻辑 px 容差内视为最大化。"""
+    target = (0, 0, 1536, 816)
+    # 精确命中
+    assert bmain._is_maximized_geometry({"x": 0, "y": 0, "width": 1536, "height": 816}, target) is True
+    # 容差内（读回抖动 ±7）
+    assert bmain._is_maximized_geometry({"x": 3, "y": -5, "width": 1539, "height": 812}, target) is True
+    # 容差外（差 9 → 非最大化）
+    assert bmain._is_maximized_geometry({"x": 0, "y": 0, "width": 1536, "height": 807}, target) is False
+    # 缺省 / None 安全
+    assert bmain._is_maximized_geometry(None, target) is False
+    assert bmain._is_maximized_geometry({"x": 0, "y": 0, "width": 1536, "height": 816}, None) is False
 
 
 def test_win_work_areas_lists_monitors():

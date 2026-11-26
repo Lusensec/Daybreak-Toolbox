@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation } from "react-router";
-import { Wifi, WifiOff, Settings, Maximize2, Minimize2, Minimize, X } from "lucide-react";
+import { Wifi, WifiOff, Settings, Maximize, Copy, Minus, X } from "lucide-react";
 import { useTheme } from "../theme/ThemeProvider";
 import { connectBridge, disconnectBridge, useConnStore, sendCommand, fetchBridgeToken } from "../services/ws";
 import { DynamicMenuNav, NavBarRow, CtxMenu } from "./DynamicMenuNav";
@@ -155,38 +155,68 @@ export default function AppShell() {
     } catch { /* 桥接未就绪 */ }
   }
 
-  /** 右下角拉伸：mousedown 取基准 rect → mousemove rAF 节流 window.resize（后端钳制最小 960×600） */
-  function onResizeStart(e: React.MouseEvent) {
-    if (!windowed || e.button !== 0) return;
-    e.preventDefault();
-    void (async () => {
-      try {
-        const r = (await sendCommand("window.get_rect", {})) as { rect?: { x: number; y: number; width: number; height: number } | null };
-        const rect = r?.rect;
-        if (!rect) return;
-        let active = true;
-        const sx = e.screenX, sy = e.screenY, ow = rect.width, oh = rect.height;
-        let queued = false;
-        let lx = sx, ly = sy;
-        const onMove = (ev: MouseEvent) => {
-          lx = ev.screenX; ly = ev.screenY;
-          if (queued || !active) return;
-          queued = true;
-          requestAnimationFrame(() => {
-            queued = false;
-            if (!active) return;
-            void sendCommand("window.resize", { width: ow + (lx - sx), height: oh + (ly - sy) }).catch(() => {});
-          });
-        };
-        const onUp = () => {
-          active = false;
-          window.removeEventListener("mousemove", onMove);
-          window.removeEventListener("mouseup", onUp);
-        };
-        window.addEventListener("mousemove", onMove);
-        window.addEventListener("mouseup", onUp);
-      } catch { /* 桥接未就绪 */ }
-    })();
+  /** 边缘/角落拉伸（v2.0.10：左/右/下边缘 + 左下/右下角；替换 v2.0.8 单一右下角手柄）。
+      基准 rect 一次取 → mousemove rAF 节流；左缘/左下先 window.move（新左上角）再 window.resize
+      （后端 N|W 固定点，顺序保证左上角跟随）；客户端镜像最小 960×600（与后端 _clamp_window_size 同源）。
+      最大化中拖边缘 = 原生语义「自动还原后拉伸」：mousedown 时若处于最大化先还原（服务端几何驱动）。 */
+  const EDGE_MIN_W = 960;
+  const EDGE_MIN_H = 600;
+  type EdgeZone = "left" | "right" | "bottom" | "bl" | "br";
+
+  function onEdgeResizeStart(zone: EdgeZone) {
+    return (e: React.MouseEvent) => {
+      if (!windowed || e.button !== 0) return;
+      e.preventDefault();
+      void (async () => {
+        try {
+          let rectRes = (await sendCommand("window.get_rect", {})) as { rect?: { x: number; y: number; width: number; height: number } | null };
+          let rect = rectRes?.rect;
+          if (!rect) return;
+          // 最大化中拖边缘：先还原（服务端按几何判定执行还原），再取新几何为基准
+          if (maximized) {
+            const m = (await sendCommand("window.maximize", {})) as { ok?: boolean; maximized?: boolean };
+            if (m?.ok) setMaximized(Boolean(m.maximized));
+            rectRes = (await sendCommand("window.get_rect", {})) as { rect?: { x: number; y: number; width: number; height: number } | null };
+            rect = rectRes?.rect;
+            if (!rect) return;
+          }
+          let active = true;
+          const sx = e.screenX, sy = e.screenY;
+          const ox = rect.x, oy = rect.y, ow = rect.width, oh = rect.height;
+          let queued = false;
+          let lx = sx, ly = sy;
+          const onMove = (ev: MouseEvent) => {
+            lx = ev.screenX; ly = ev.screenY;
+            if (queued || !active) return;
+            queued = true;
+            requestAnimationFrame(() => {
+              queued = false;
+              if (!active) return;
+              const dx = lx - sx, dy = ly - sy;
+              let w = ow, h = oh, x = ox, y = oy;
+              if (zone === "right" || zone === "br") w = ow + dx;
+              if (zone === "bottom" || zone === "bl") h = oh + dy;
+              if (zone === "left" || zone === "bl") {
+                w = Math.max(EDGE_MIN_W, ow - dx);
+                x = ox + (ow - w); // 左上角随左缘右移
+              }
+              w = Math.max(EDGE_MIN_W, w); // 客户端镜像钳制（后端 _clamp_window_size 双保险）
+              h = Math.max(EDGE_MIN_H, h);
+              // 位置+大小一次原子提交（window.set_rect 单次 SetWindowPos）：
+              // 旧版 左缘=move+resize 两步快连发会被 WinForms UI 线程吞一笔 → 卡顿/位置钉死
+              void sendCommand("window.set_rect", { x, y, width: w, height: h }).catch(() => {});
+            });
+          };
+          const onUp = () => {
+            active = false;
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup", onUp);
+          };
+          window.addEventListener("mousemove", onMove);
+          window.addEventListener("mouseup", onUp);
+        } catch { /* 桥接未就绪 */ }
+      })();
+    };
   }
 
   /** 固定菜单右键：隐藏 / 显示菜单栏（参数存 config.json，1 显示 / 0 隐藏） */
@@ -330,10 +360,10 @@ export default function AppShell() {
           {windowed ? (
             <>
               <button className="win-ctrl" onClick={() => { void sendCommand("window.minimize", {}).catch(() => {}); }} title="最小化窗口">
-                <Minimize size={16} />
+                <Minus size={16} />
               </button>
               <button className="win-ctrl" onClick={() => void toggleMaximize()} title={maximized ? "还原窗口" : "最大化窗口"}>
-                {maximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                {maximized ? <Copy size={16} /> : <Maximize size={16} />}
               </button>
               <button className="win-ctrl win-ctrl--close" onClick={() => { void sendCommand("app.quit", {}).catch(() => {}); }} title="关闭破晓·工具箱">
                 <X size={16} />
@@ -428,9 +458,17 @@ export default function AppShell() {
       {/* 全局重命名对话框（替代 window.prompt；顶栏右键 / 设置页 / 子窗口 共用） */}
       <PromptDialogHost />
 
-      {/* 右下角拉伸手柄（仅无边框窗口形态：拖动调整窗口大小，最小 960×600 由后端钳制） */}
+      {/* 全边缘拉伸手柄（v2.0.10，仅无边框窗口形态）：左/右缘 6px、下缘 6px + 左下/右下角 14px，
+          任意边缘位置可拖动调整窗口大小（最小 960×600 客户端镜像 + 后端 _clamp_window_size 双保险）；
+          顶缘不做（顶栏是拖移区）；模态层打开时边缘被盖住不可拉伸（可接受） */}
       {windowed ? (
-        <div className="win-resize" onMouseDown={onResizeStart} title="拖动调整窗口大小" />
+        <>
+          <div className="win-edge win-edge--left" onMouseDown={onEdgeResizeStart("left")} title="拖动调整窗口大小" />
+          <div className="win-edge win-edge--right" onMouseDown={onEdgeResizeStart("right")} title="拖动调整窗口大小" />
+          <div className="win-edge win-edge--bottom" onMouseDown={onEdgeResizeStart("bottom")} title="拖动调整窗口大小" />
+          <div className="win-edge win-edge--bl" onMouseDown={onEdgeResizeStart("bl")} title="拖动调整窗口大小" />
+          <div className="win-edge win-edge--br" onMouseDown={onEdgeResizeStart("br")} title="拖动调整窗口大小" />
+        </>
       ) : null}
     </div>
   );

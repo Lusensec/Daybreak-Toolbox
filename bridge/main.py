@@ -522,6 +522,9 @@ def _register_builtin_commands() -> None:
     async def _window_minimize(_p, _ws):
         return await asyncio.to_thread(minimize_window)
 
+    async def _window_set_rect(p, _ws):
+        return await asyncio.to_thread(set_window_rect, p.get("x", 0), p.get("y", 0), p.get("width", 960), p.get("height", 600))
+
     _bus.register("app.env", _app_env)
     _bus.register("app.quit", _app_quit)
     _bus.register("window.get_rect", _window_get_rect)
@@ -529,6 +532,7 @@ def _register_builtin_commands() -> None:
     _bus.register("window.resize", _window_resize)
     _bus.register("window.maximize", _window_maximize)
     _bus.register("window.minimize", _window_minimize)
+    _bus.register("window.set_rect", _window_set_rect)
 
     # ---- SSH 终端（config/ssh_hosts.json 主机表 + 常驻 paramiko 会话；会话断开广播 ssh.closed）----
     def _ssh_call(fn, *a, **kw):
@@ -594,7 +598,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.9", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.10", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -809,87 +813,161 @@ def _win_work_areas() -> "list[tuple[tuple[int, int, int, int], tuple[int, int, 
     return mons
 
 
-def _window_dpi_scale() -> float | None:
-    """窗口所在显示器 scale（GetDpiForWindow/96 —— 与 WinForms 后端 move/resize 换算同源）。"""
-    w = _active_window()
-    if w is None:
-        return None
+def _showwindow_normal(w) -> None:
+    """ShowWindow(SW_SHOWNORMAL=1)：清残留 showCmd（历史异常路径若曾把窗口置 Maximized/Minimized，
+    手动 move/resize 后把状态机拉回 Normal，保证后续 SetWindowPos 始终被 Windows 受理）。"""
     try:
         import ctypes
-        handle = int(w.native.Handle)
-        dpi = ctypes.windll.user32.GetDpiForWindow(handle)
+        ctypes.windll.user32.ShowWindow(_handle_int(w), 1)
+    except Exception:
+        pass
+
+
+import threading as _threading
+
+_geo_lock = _threading.Lock()
+
+
+def _set_window_geometry(w, x, y, ww, hh) -> None:
+    """单次原子 SetWindowPos（位置+大小一次提交）应用窗口几何（move/resize 入参空间，×窗口 scale → 物理）。
+    为什么不用 pywebview 的 w.move()+w.resize() 两步：
+    - 两步跨线程 SetWindowPos 快速连发时，WinForms UI 线程未消化完上一笔 WM_MOVE/WM_SIZE，
+      第二笔被丢弃/半应用（v2.0.10 冒烟实测：快连点还原不生效，慢速则正常）；
+    - 后端 resize 内部读 Location 决定固定点，跨线程读到旧值会把窗口钉回错误位置。
+    串行锁 + 120ms 落定延时保证 UI 线程消化完再放行下一笔；ShowWindow(Normal) 清残留 showCmd。"""
+    with _geo_lock:
+        import ctypes
+        import time
+        user32 = ctypes.windll.user32
+        handle = _handle_int(w)
+        scale = _window_dpi_scale()
+        # SWP_NOZORDER(0x04) | SWP_SHOWWINDOW(0x40) | SWP_NOACTIVATE(0x10)
+        user32.SetWindowPos(handle, None, int(x * scale), int(y * scale),
+                            int(ww * scale), int(hh * scale), 0x04 | 0x40 | 0x10)
+        user32.ShowWindow(handle, 1)  # SW_SHOWNORMAL：清残留 Maximized/Minimized 状态
+        time.sleep(0.12)  # 让 UI 线程消化 WM_MOVE/WM_SIZE，下一笔才不会被吞
+
+
+def _handle_int(w) -> int:
+    """WinForms 句柄 → 原生 int。pythonnet 下 Handle 是 .NET IntPtr（须 .ToInt32()；
+    Python int() 不能直接解析 .NET 结构体）；非冻结/测试环境裸 int 兜底。"""
+    h = w.native.Handle
+    return h.ToInt32() if hasattr(h, "ToInt32") else int(h)
+
+
+def _window_dpi_scale() -> float:
+    """窗口所在显示器 scale（GetDpiForWindow/96 —— 与 WinForms 后端 move/resize 换算同源）。
+    任何异常回退 1.0（宁可目标略偏，也不允许 None 导致落回原生最大化）。"""
+    w = _active_window()
+    if w is None:
+        return 1.0
+    try:
+        import ctypes
+        dpi = ctypes.windll.user32.GetDpiForWindow(_handle_int(w))
         return (dpi / 96.0) if dpi >= 96 else 1.0
     except Exception:
-        return None
+        return 1.0
 
 
 def _win_maximize_target():
-    """窗口所在显示器工作区（move/resize 入参 = 物理工作区 ÷ 窗口 scale）；取不到返回 None。
-    手动版原因：无边框窗口 WindowState=Maximized 会盖任务栏，且原生最大化后手动
-    move/resize 不重置 WindowState → 状态失步（v2.0.8 卡死 bug 根因之一）。"""
+    """窗口所在显示器工作区（move/resize 入参 = 物理工作区 ÷ 窗口 scale）；**永不返回 None**：
+    枚举失败时回退主屏全屏（GetSystemMetrics 物理值 ÷ 1.0）——Windows 路径不使用原生
+    w.maximize()（无边框原生最大化 → showCmd=Maximized，其后紧跟的手动 SetWindowPos 会被
+    Windows 忽略 = v2.0.9「第二次点击不响应」的根因）。"""
     w = _active_window()
     r = window_rect()
     scale = _window_dpi_scale()
-    if w is None or r is None or scale is None:
+    if w is None or r is None:
         return None
     mons = _win_work_areas()
-    if not mons:
-        return None
-    # 窗口物理中心 = 回读中心 × 窗口 scale（回读值即 物理÷scale）
-    cx_phys = (r["x"] + r["width"] // 2) * scale
-    cy_phys = (r["y"] + r["height"] // 2) * scale
-    pick = None
-    for mon, _work in mons:
-        ml, mt, mw, mh = mon
-        # ±20% 容差命中（跨屏中心歧义时取先命中者；主屏在前）
-        if ml - mw * 0.2 <= cx_phys <= ml + mw * 1.2 and mt - mh * 0.2 <= cy_phys <= mt + mh * 1.2:
-            pick = (mon, _work)
-            break
-    if pick is None:
-        pick = mons[0]
-    _mon, work = pick
-    wl, wt, ww, wh = work
-    return (int(wl / scale), int(wt / scale), int(ww / scale), int(wh / scale))
+    if mons:
+        # 窗口物理中心 = 回读中心 × 窗口 scale（回读值即 物理÷scale）
+        cx_phys = (r["x"] + r["width"] // 2) * scale
+        cy_phys = (r["y"] + r["height"] // 2) * scale
+        pick = None
+        for mon, _work in mons:
+            ml, mt, mw, mh = mon
+            # ±20% 容差命中（跨屏中心歧义时取先命中者；主屏在前）
+            if ml - mw * 0.2 <= cx_phys <= ml + mw * 1.2 and mt - mh * 0.2 <= cy_phys <= mt + mh * 1.2:
+                pick = (mon, _work)
+                break
+        if pick is None:
+            pick = mons[0]
+        _mon, work = pick
+        wl, wt, ww, wh = work
+        return (int(wl / scale), int(wt / scale), int(ww / scale), int(wh / scale))
+    # 兜底：主屏全屏（GetSystemMetrics 物理值 ÷1.0；主屏 100% 时精确，125% 时略大——可接受）
+    import ctypes
+    user32 = ctypes.windll.user32
+    sw = user32.GetSystemMetrics(0)  # SM_CXSCREEN（主屏物理宽）
+    sh = user32.GetSystemMetrics(1)  # SM_CYSCREEN（主屏物理高）
+    return (0, 0, sw, sh)
+
+
+def _is_maximized_geometry(rect, target, tol=8) -> bool:
+    """几何判定：当前窗口 rect 是否 ≈ 某显示器工作区目标（move/resize 入参空间，±tol 逻辑 px）。
+    纯函数（可单测）。用途：最大化 toggle 不信任标志位——页面重载/任务栏往返/最大化中
+    手动改大小都会让标志与真实几何脱节；按几何判定则每次点击幂等自愈。"""
+    if not rect or not target:
+        return False
+    return (abs(rect["x"] - target[0]) <= tol and abs(rect["y"] - target[1]) <= tol
+            and abs(rect["width"] - target[2]) <= tol and abs(rect["height"] - target[3]) <= tol)
 
 
 def toggle_maximize() -> dict:
-    """最大化/还原 toggle。
-    Windows：全程手动 move/resize（WindowState 保持 Normal，避免无边框原生最大化
-    盖任务栏 + 状态失步的 v2.0.8 卡死 bug）；几何由本函数记忆。
-    macOS/Linux：原生 maximize()/restore()（无边框下行为正常）。
+    """最大化/还原 toggle（几何驱动，幂等自愈）。
+    Windows：读当前几何 vs 工作区目标判定 已/未最大化 → 手动 move/resize（WindowState 保持
+    Normal，避开无边框原生最大化盖任务栏；_MAX_STATE.saved 仅作「最大化前几何」缓存）。
+    无论此前点过几次、是否重载页面/动过任务栏，结果都由真实几何决定，不存在失步卡死态。
+    macOS/Linux：原生 maximize()/restore()（无边框下行为正常，保留标志位配对）。
     返回 {"maximized": bool} 供 web 端切换图标。"""
     global _MAX_STATE
     w = _active_window()
     if w is None:
         return {"ok": False, "error": "window unavailable"}
     try:
-        if _MAX_STATE["maximized"]:
-            if sys.platform == "win32":
-                x, y, ww, hh = _MAX_STATE["saved"] or (0, 0, 1280, 800)
-                w.move(x, y)
-                w.resize(ww, hh)
-            else:
-                w.restore()
-            _MAX_STATE = {"maximized": False, "saved": None}
-            return {"ok": True, "maximized": False}
-        # 最大化
         if sys.platform == "win32":
             r = window_rect()
             if r is None:
                 return {"ok": False, "error": "window unavailable"}
-            _MAX_STATE = {"maximized": True, "saved": (r["x"], r["y"], r["width"], r["height"])}
+            target = _win_maximize_target()
+            if target and _is_maximized_geometry(r, target):
+                # 处于最大化 → 还原（saved 缺失回退默认 1280×800 居中语义：0,0 由 WinForms 初始位决定）
+                x, y, ww, hh = _MAX_STATE.get("saved") or (0, 0, 1280, 800)
+                _set_window_geometry(w, x, y, ww, hh)
+                _MAX_STATE = {"saved": None}
+                return {"ok": True, "maximized": False}
+            # 非最大化 → 最大化（先缓存当前几何供还原）
+            _MAX_STATE = {"saved": (r["x"], r["y"], r["width"], r["height"])}
             target = _win_maximize_target()
             if target:
-                w.move(target[0], target[1])
-                w.resize(target[2], target[3])
-            else:  # 枚举失败兜底：原生最大化（可能盖任务栏，罕见）
-                w.maximize()
-        else:
-            _MAX_STATE = {"maximized": True, "saved": None}
-            w.maximize()
+                _set_window_geometry(w, target[0], target[1], target[2], target[3])
+            else:  # 窗口不可读（罕见）：保持现状，不切标志
+                return {"ok": False, "error": "window unavailable"}
+            return {"ok": True, "maximized": True}
+        # macOS / Linux：原生最大化/还原（标志位配对；无边框在 cocoa/gtk 下行为正常）
+        if _MAX_STATE.get("maximized"):
+            w.restore()
+            _MAX_STATE = {"maximized": False, "saved": None}
+            return {"ok": True, "maximized": False}
+        w.maximize()
+        _MAX_STATE = {"maximized": True, "saved": None}
         return {"ok": True, "maximized": True}
     except Exception as e:
-        _MAX_STATE = {"maximized": False, "saved": None}  # 失败回位状态机，防失步
+        return {"ok": False, "error": str(e)}
+
+
+def set_window_rect(x, y, w, h) -> dict:
+    """窗口几何原子设置（位置+大小一次 SetWindowPos；边缘左缘/左下拖拽用——先挪左上角再改宽，
+    两步分开快连发会被 UI 线程吞一笔）。尺寸走 _clamp_window_size（与 window.resize 同源）。"""
+    w_win = _active_window()
+    if w_win is None:
+        return {"ok": False, "error": "window unavailable"}
+    try:
+        cw, ch = _clamp_window_size(w, h)
+        _set_window_geometry(w_win, int(x), int(y), cw, ch)
+        return {"ok": True, "x": int(x), "y": int(y), "width": cw, "height": ch}
+    except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
