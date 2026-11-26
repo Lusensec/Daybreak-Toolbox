@@ -7,9 +7,9 @@
 ;    默认目录可写；用户改到 Program Files 等只读目录时 config 写入会受限——README 已注明）
 ;  - 产物：Daybreak-Toolbox-<AppVersion>-win-setup.exe（per-user 安装，卸载项在 HKCU）
 
-; AppVersion / AppVerNum 必须由 /D: 传入（脚本内 #define 会覆盖 /D: 值，故不写默认值；
-; 缺参时 Inno 以 undefined constant 报错，属预期行为）。ExePath 由脚本固定（相对脚本目录解析）。
-;   本地构建示例：ISCC /D:AppVersion=v2.0.10 /D:AppVerNum=2.0.10 packaging\windows\setup.iss
+; 版本常量来自 _defines.inc（CI 构建前覆盖写入当前 tag；本地构建直接改该文件）。
+; 不用 iscc /D: 传参——实测 runner 上 /D: 参数未生效（脚本 #define 又覆盖命令行的双重怪癖）。
+#include "_defines.inc"
 #define ExePath    "..\..\dist\DaybreakToolbox.exe"  ; onefile 产物（相对 packaging/windows/）
 
 [Setup]

@@ -124,9 +124,10 @@ jobs:
             *)  ver="manual" ;;
           esac
           num="${ver#v}"   # Inno VersionNumber 要求纯点分数字
-          # MSYS_NO_PATHCONV=1：防 Git Bash 把 /D: 参数当路径转换（否则 iscc 报 "more than one script filename"）
-          # ExePath 由 setup.iss 默认值提供（..\..\dist\DaybreakToolbox.exe，相对脚本目录）
-          MSYS_NO_PATHCONV=1 iscc /D:AppVersion="$ver" /D:AppVerNum="$num" packaging/windows/setup.iss
+          # 版本常量写入 _defines.inc（setup.iss 以 #include 引入；不用 /D:——runner 上实测不生效）
+          printf '#define AppVersion "%s"\n#define AppVerNum  "%s"\n' "$ver" "$num" > packaging/windows/_defines.inc
+          # MSYS_NO_PATHCONV=1：防 Git Bash 把 / 开头参数当路径转换
+          MSYS_NO_PATHCONV=1 iscc packaging/windows/setup.iss
           # 产物在 packaging/windows/out/ → 挪到工作区根，供上传步骤引用
           mv "packaging/windows/out/Daybreak-Toolbox-${ver}-win-setup.exe" .
           ls -la "Daybreak-Toolbox-${ver}-win-setup.exe"
