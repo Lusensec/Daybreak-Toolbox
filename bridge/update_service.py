@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.7"
+APP_VERSION = "2.0.8"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,14 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.8":
+"""
+1、无边框窗口形态：移除 exe 原生标题栏（全平台窗口形态统一），窗口观感回归 web 自定义顶栏
+2、顶栏右侧（主题切换右边）新增 最大化/还原 + 关闭 X 按钮：X 关闭整个应用（与托盘「退出破晓工具箱」同义）
+3、顶栏品牌区/栏间隙 按住拖动可移动窗口、双击最大化（模拟原生标题栏行为）；右下角小三角可拉伸缩放窗口（最小 960×600）
+4、新增 WS 命令：app.env（窗口形态探测）/ app.quit（退出进程）/ window.get_rect / window.move / window.resize / window.maximize（Windows 手动工作区版最大化，避开无边框盖任务栏）
+5、浏览器 / 服务形态顶栏保持原样（不渲染窗口控件）
+""",
     "v2.0.7":
 """
 1、移除悬浮球功能：原生 Win32 置顶球、ball.get_state / ball.set_topmost / ball.set_hidden 命令与 ball.state 事件、设置页「悬浮球」开关（置顶/隐藏）、全局快捷键 ball:show（显隐切换）、托盘「显示悬浮球」项、config/ball_pos.json 位置持久化全部移除

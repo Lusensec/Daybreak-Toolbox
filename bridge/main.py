@@ -500,6 +500,32 @@ def _register_builtin_commands() -> None:
     _bus.register("shortcut.get", _shortcut_get)
     _bus.register("shortcut.set", _shortcut_set)
 
+    # ---- 应用形态 / 自定义窗口控件（v2.0.8 无边框窗口：web 顶栏驱动 移动/最大化/拉伸/关闭）----
+    async def _app_env(_p, _ws):
+        return get_app_env()
+
+    async def _app_quit(_p, _ws):
+        await asyncio.to_thread(quit_app)  # 不返回（进程终止）
+
+    async def _window_get_rect(_p, _ws):
+        return {"rect": await asyncio.to_thread(window_rect)}
+
+    async def _window_move(p, _ws):
+        return await asyncio.to_thread(move_window, int(p.get("x", 0)), int(p.get("y", 0)))
+
+    async def _window_resize(p, _ws):
+        return await asyncio.to_thread(resize_window, int(p.get("width", 0)), int(p.get("height", 0)))
+
+    async def _window_maximize(_p, _ws):
+        return await asyncio.to_thread(toggle_maximize)
+
+    _bus.register("app.env", _app_env)
+    _bus.register("app.quit", _app_quit)
+    _bus.register("window.get_rect", _window_get_rect)
+    _bus.register("window.move", _window_move)
+    _bus.register("window.resize", _window_resize)
+    _bus.register("window.maximize", _window_maximize)
+
     # ---- SSH 终端（config/ssh_hosts.json 主机表 + 常驻 paramiko 会话；会话断开广播 ssh.closed）----
     def _ssh_call(fn, *a, **kw):
         try:
@@ -564,7 +590,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.7", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.8", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -684,14 +710,214 @@ def pick_mode(argv: "list[str]") -> str:
     return "service"
 
 
+# ---- 自定义窗口控件（v2.0.8 起窗口形态为无边框：web 顶栏驱动 移动/最大化/拉伸/关闭）----
+# 坐标约定：pywebview 的 move/resize 与 .x/.y/.width/.height 均为「逻辑像素」
+# （WinForms 后端内部乘窗口 DPI scale）；web 端 e.screenX/screenY 同为 DIP，增量直接可用。
+_WINDOWED_UI = False  # 模块标志：run_windowed 创建窗口前置 True；app.env 命令返回
+_WINDOW_MIN_W, _WINDOW_MIN_H = 960, 600  # 与 run_windowed 的 min_size 同源
+
+
+def get_app_env() -> dict:
+    """进程运行形态（web 端据此决定渲染 关闭X/最大化/拖移/拉伸 控件；非窗口形态不渲染）。"""
+    return {"windowed": _WINDOWED_UI, "frameless": _WINDOWED_UI, "platform": sys.platform}
+
+
+def _active_window():
+    """当前 pywebview 主窗口（非窗口形态 / 窗口未创建 → None）。"""
+    try:
+        import webview as _webview
+        return _webview.windows[0] if _webview.windows else None
+    except Exception:
+        return None
+
+
+def window_rect() -> Optional[dict]:
+    """窗口位置/尺寸（逻辑像素）；不可用返回 None。web 端以此基准驱动 move/resize。"""
+    w = _active_window()
+    if w is None:
+        return None
+    try:
+        return {"x": int(w.x), "y": int(w.y), "width": int(w.width), "height": int(w.height)}
+    except Exception:
+        return None
+
+
+def move_window(x: int, y: int) -> dict:
+    w = _active_window()
+    if w is None:
+        return {"ok": False, "error": "window unavailable"}
+    try:
+        w.move(int(x), int(y))
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _clamp_window_size(width, height) -> "tuple[int, int]":
+    """拉伸钳制到最小尺寸（与 min_size 同源）；纯函数可测。"""
+    return max(int(width), _WINDOW_MIN_W), max(int(height), _WINDOW_MIN_H)
+
+
+def resize_window(width, height) -> dict:
+    w = _active_window()
+    if w is None:
+        return {"ok": False, "error": "window unavailable"}
+    cw, ch = _clamp_window_size(width, height)
+    try:
+        w.resize(cw, ch)  # 默认 fix point = 左上角（NORTH|WEST）：右下角手柄放大/缩小
+        return {"ok": True, "width": cw, "height": ch}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+_MAX_STATE = {"maximized": False, "saved": None}
+
+
+def _win_screens_info() -> list:
+    """各显示器 物理区 + 工作区（物理 px，ctypes）+ 对应逻辑工作区（Windows only）。
+    工作区逻辑坐标 = 目标屏逻辑原点 + (rcWork - rcMonitor) / 屏 scale；
+    屏 scale 从 pywebview.screens（逻辑值 + physical_* 属性）按物理边界匹配，缺失按 1.0。"""
+    import ctypes
+    user32 = ctypes.windll.user32
+
+    class RECT(ctypes.Structure):
+        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", ctypes.c_uint32), ("rcMonitor", RECT),
+                    ("rcWork", RECT), ("dwFlags", ctypes.c_uint32)]
+
+    mons: "list[tuple[RECT, RECT]]" = []
+
+    def cb(hMon, _h, _lprc, _dw):
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        user32.GetMonitorInfoW(hMon, ctypes.byref(mi))
+        mons.append((mi.rcMonitor, mi.rcWork))
+        return True
+
+    _cb_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+    user32.EnumDisplayMonitors(None, None, _cb_type(cb), None)
+
+    try:
+        import webview as _webview
+        screens = _webview.screens()
+    except Exception:
+        screens = []
+
+    out = []
+    for mon, work in mons:
+        screen = None
+        for s in screens:
+            if (abs(s.physical_x - mon.left) <= 2 and abs(s.physical_y - mon.top) <= 2
+                    and abs(s.physical_width - (mon.right - mon.left)) <= 2
+                    and abs(s.physical_height - (mon.bottom - mon.top)) <= 2):
+                screen = s
+                break
+        scale = float(screen.scale) if screen is not None else 1.0
+        lx = screen.x if screen is not None else mon.left
+        ly = screen.y if screen is not None else mon.top
+        out.append({
+            "log_x": lx + int((work.left - mon.left) / scale),
+            "log_y": ly + int((work.top - mon.top) / scale),
+            "log_w": int((work.right - work.left) / scale),
+            "log_h": int((work.bottom - work.top) / scale),
+            "mon_left": mon.left, "mon_top": mon.top,
+            "mon_w": mon.right - mon.left, "mon_h": mon.bottom - mon.top,
+        })
+    return out
+
+
+def _win_maximize_target():
+    """窗口所在显示器工作区（逻辑像素 x,y,w,h）；取不到返回 None（调用方落原生 maximize）。
+    手动版原因：WinForms 无边框窗口 WindowState=Maximized 会盖住任务栏。"""
+    w = _active_window()
+    if w is None:
+        return None
+    # 窗口物理中心：WinForms 表单（Window.native）直接读（物理像素），失败则按主屏 scale 近似
+    cx_phys = cy_phys = None
+    try:
+        form = w.native
+        cx_phys = form.Left + form.Width // 2
+        cy_phys = form.Top + form.Height // 2
+    except Exception:
+        try:
+            import webview as _webview
+            scr = _webview.screens()[0]
+            cx_phys = int((w.x + w.width // 2) * scr.scale)
+            cy_phys = int((w.y + w.height // 2) * scr.scale)
+        except Exception:
+            return None
+    infos = _win_screens_info()
+    if not infos:
+        return None
+    pick = None
+    for m in infos:
+        if m["mon_left"] <= cx_phys < m["mon_left"] + m["mon_w"] and \
+           m["mon_top"] <= cy_phys < m["mon_top"] + m["mon_h"]:
+            pick = m
+            break
+    if pick is None:
+        pick = infos[0]
+    return (pick["log_x"], pick["log_y"], pick["log_w"], pick["log_h"])
+
+
+def toggle_maximize() -> dict:
+    """最大化/还原 toggle。Windows：手动工作区版（避开无边框盖任务栏）；其它平台：原生 maximize/restore。
+    返回 {"maximized": bool} 供 web 端切换图标。最大化态手动 resize 后还原会回到「最大化前」几何（可接受）。"""
+    global _MAX_STATE
+    w = _active_window()
+    if w is None:
+        return {"ok": False, "error": "window unavailable"}
+    try:
+        if sys.platform == "win32":
+            if _MAX_STATE["maximized"]:
+                x, y, ww, hh = _MAX_STATE["saved"] or (0, 0, 1280, 800)
+                w.move(x, y)
+                w.resize(ww, hh)
+                _MAX_STATE["maximized"] = False
+                _MAX_STATE["saved"] = None
+                return {"ok": True, "maximized": False}
+            r = window_rect()
+            if r is None:
+                return {"ok": False, "error": "window unavailable"}
+            _MAX_STATE["saved"] = (r["x"], r["y"], r["width"], r["height"])
+            target = _win_maximize_target()
+            if target:
+                w.move(target[0], target[1])
+                w.resize(target[2], target[3])
+            else:  # ctypes 枚举失败兜底：原生最大化（可能盖任务栏，仅兜底路径）
+                w.maximize()
+            _MAX_STATE["maximized"] = True
+            return {"ok": True, "maximized": True}
+        # macOS / Linux：原生最大化（无边框窗口在 cocoa/gtk 下 maximize 行为正常）
+        if _MAX_STATE["maximized"]:
+            w.restore()
+            _MAX_STATE["maximized"] = False
+        else:
+            w.maximize()
+            _MAX_STATE["maximized"] = True
+        return {"ok": True, "maximized": _MAX_STATE["maximized"]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def quit_app() -> None:
+    """关闭应用程序：终止全进程（与托盘「退出破晓工具箱」同语义；daemon 线程随进程消失）。"""
+    print("[bridge] app.quit requested; exiting process")
+    os._exit(0)
+
+
 def run_windowed(port: Optional[int] = None) -> None:
     """打包窗口模式（方案 A）：主线程跑 pywebview 原生窗口（Windows=WebView2 / macOS=WKWebView /
     Linux=WebKitGTK），加载同源桥接 UI；uvicorn / 托盘均为 daemon 后台线程。
+    v2.0.8 起无边框（frameless）：原生标题栏移除，窗口操作（移动/最大化/拉伸/关闭）由 web 顶栏驱动。
 
     - 关闭窗口 → 退出全进程（与托盘「退出破晓工具箱」同语义；想服务常驻请用 --service）
     - 窗口引擎不可用（无 WebView2 / 无显示环境等）→ 降级「服务 + 默认浏览器」并保持进程存活
     """
-    global _current_port
+    global _current_port, _WINDOWED_UI
     import threading as _threading
 
     from .menu_service import project_root as _project_root
@@ -713,12 +939,13 @@ def run_windowed(port: Optional[int] = None) -> None:
     print(f"[bridge] token: {_token_mod.get_token()}")
 
     _pr = _project_root()
+    _WINDOWED_UI = True  # app.env → web 端渲染 关闭X/最大化/拖移/拉伸 控件
     start_tray(port, root=_pr)
 
     try:
         import webview
         webview.create_window("破晓·工具箱", url, width=1280, height=800,
-                              resizable=True, min_size=(960, 600))
+                              resizable=True, min_size=(960, 600), frameless=True)
         webview.start()  # 阻塞：主线程窗口消息循环；窗口关闭后返回
     except Exception as e:
         print(f"[bridge] 窗口模式不可用（{type(e).__name__}: {e}）；降级服务模式，用默认浏览器打开界面")

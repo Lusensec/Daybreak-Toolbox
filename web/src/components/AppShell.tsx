@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation } from "react-router";
-import { Moon, Sun, Wifi, WifiOff, Settings, Monitor } from "lucide-react";
+import { Moon, Sun, Wifi, WifiOff, Settings, Monitor, Maximize2, Minimize2, X } from "lucide-react";
 import { useTheme } from "../theme/ThemeProvider";
 import type { ThemeChoice } from "../theme/ThemeProvider";
 import { connectBridge, disconnectBridge, useConnStore, sendCommand, fetchBridgeToken } from "../services/ws";
@@ -103,6 +103,97 @@ export default function AppShell() {
   const fixedVisible = useMenuStore((s) => s.fixedVisible);
   const [fixedCtx, setFixedCtx] = useState<CtxState | null>(null);
 
+  // ---- 自定义窗口控件（v2.0.8 起窗口形态为无边框：顶栏驱动 移动/最大化/拉伸/关闭；非窗口形态不渲染）----
+  const [windowed, setWindowed] = useState(false);
+  const [maximized, setMaximized] = useState(false);
+  const dragState = useRef<{ active: boolean; sx: number; sy: number; ox: number; oy: number } | null>(null);
+
+  /** 顶栏非交互目标判定：按钮/链接/输入控件/可脱离项 不参与拖移（品牌区、栏间隙可拖） */
+  function isHeaderDragTarget(t: EventTarget | null): boolean {
+    if (!(t instanceof HTMLElement)) return false;
+    return !t.closest("button, a, input, select, textarea, [draggable='true']");
+  }
+
+  /** 顶栏拖拽移动窗口：mousedown 取一次窗口基准 rect → mousemove rAF 节流 window.move（DIP 增量，逻辑像素一致） */
+  function onHeaderDragStart(e: React.MouseEvent) {
+    if (!windowed || e.button !== 0 || !isHeaderDragTarget(e.target)) return;
+    void (async () => {
+      try {
+        const r = (await sendCommand("window.get_rect", {})) as { rect?: { x: number; y: number; width: number; height: number } | null };
+        const rect = r?.rect;
+        if (!rect) return;
+        const d = { active: true, sx: e.screenX, sy: e.screenY, ox: rect.x, oy: rect.y };
+        dragState.current = d;
+        let queued = false;
+        let lx = e.screenX, ly = e.screenY;
+        const onMove = (ev: MouseEvent) => {
+          lx = ev.screenX; ly = ev.screenY;
+          if (queued || !d.active) return;
+          queued = true;
+          requestAnimationFrame(() => {
+            queued = false;
+            if (!d.active) return;
+            void sendCommand("window.move", { x: d.ox + (lx - d.sx), y: d.oy + (ly - d.sy) }).catch(() => {});
+          });
+        };
+        const onUp = () => {
+          d.active = false;
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+        };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+      } catch { /* 桥接未就绪：不拖 */ }
+    })();
+  }
+
+  /** 顶栏双击 = 最大化/还原（模拟原生标题栏行为；交互目标除外） */
+  function onHeaderDblClick(e: React.MouseEvent) {
+    if (windowed && isHeaderDragTarget(e.target)) void toggleMaximize();
+  }
+
+  /** 最大化/还原 toggle：后端管几何（Windows 手动工作区版，避开无边框盖任务栏），web 只切图标 */
+  async function toggleMaximize() {
+    try {
+      const r = (await sendCommand("window.maximize", {})) as { ok?: boolean; maximized?: boolean };
+      if (r?.ok) setMaximized(Boolean(r.maximized));
+    } catch { /* 桥接未就绪 */ }
+  }
+
+  /** 右下角拉伸：mousedown 取基准 rect → mousemove rAF 节流 window.resize（后端钳制最小 960×600） */
+  function onResizeStart(e: React.MouseEvent) {
+    if (!windowed || e.button !== 0) return;
+    e.preventDefault();
+    void (async () => {
+      try {
+        const r = (await sendCommand("window.get_rect", {})) as { rect?: { x: number; y: number; width: number; height: number } | null };
+        const rect = r?.rect;
+        if (!rect) return;
+        let active = true;
+        const sx = e.screenX, sy = e.screenY, ow = rect.width, oh = rect.height;
+        let queued = false;
+        let lx = sx, ly = sy;
+        const onMove = (ev: MouseEvent) => {
+          lx = ev.screenX; ly = ev.screenY;
+          if (queued || !active) return;
+          queued = true;
+          requestAnimationFrame(() => {
+            queued = false;
+            if (!active) return;
+            void sendCommand("window.resize", { width: ow + (lx - sx), height: oh + (ly - sy) }).catch(() => {});
+          });
+        };
+        const onUp = () => {
+          active = false;
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+        };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+      } catch { /* 桥接未就绪 */ }
+    })();
+  }
+
   /** 固定菜单右键：隐藏 / 显示菜单栏（参数存 config.json，1 显示 / 0 隐藏） */
   async function toggleFixedMenu(name: string) {
     const show = !isFixedVisible(fixedVisible, name);
@@ -157,6 +248,10 @@ export default function AppShell() {
     bindShortcutEvents();
     // SSH 主机表：首次加载 + 订阅 ssh.hosts.changed / ssh.closed（终端设置改主机后下拉框即时同步）
     bindSshEvents();
+    // 窗口形态探测：无边框窗口（frameless）才渲染 最大化/关闭X/拖移/拉伸 控件（浏览器/服务形态隐藏）
+    sendCommand("app.env", {})
+      .then((r) => { if ((r as { windowed?: boolean }).windowed) { setWindowed(true); } })
+      .catch(() => {});
     return () => {
       disconnectBridge();
       sub();
@@ -189,7 +284,7 @@ export default function AppShell() {
 
   return (
     <div className="app-shell">
-      <header className="menu-bar" ref={topBarRef}>
+      <header className="menu-bar" ref={topBarRef} onMouseDown={onHeaderDragStart} onDoubleClick={onHeaderDblClick}>
         <div className="menu-brand">
           <img className="menu-brand__logo" src={isDark ? "/logo.png" : "/logo-light.png"} alt="破晓·工具箱" />
           <span className="menu-title">破晓·工具箱</span>
@@ -245,6 +340,17 @@ export default function AppShell() {
               {theme === "light" ? <Sun size={16} /> : theme === "dark" ? <Moon size={16} /> : <Monitor size={16} />}
             </button>
           </div>
+          {/* 自定义窗口控件（仅无边框窗口形态：原生标题栏已移除，窗口操作在此） */}
+          {windowed ? (
+            <>
+              <button className="win-ctrl" onClick={() => void toggleMaximize()} title={maximized ? "还原窗口" : "最大化窗口"}>
+                {maximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
+              <button className="win-ctrl win-ctrl--close" onClick={() => { void sendCommand("app.quit", {}).catch(() => {}); }} title="关闭破晓·工具箱">
+                <X size={16} />
+              </button>
+            </>
+          ) : null}
         </div>
       </header>
 
@@ -332,6 +438,11 @@ export default function AppShell() {
 
       {/* 全局重命名对话框（替代 window.prompt；顶栏右键 / 设置页 / 子窗口 共用） */}
       <PromptDialogHost />
+
+      {/* 右下角拉伸手柄（仅无边框窗口形态：拖动调整窗口大小，最小 960×600 由后端钳制） */}
+      {windowed ? (
+        <div className="win-resize" onMouseDown={onResizeStart} title="拖动调整窗口大小" />
+      ) : null}
     </div>
   );
 }
