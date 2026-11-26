@@ -7,10 +7,18 @@
 ;    默认目录可写；用户改到 Program Files 等只读目录时 config 写入会受限——README 已注明）
 ;  - 产物：Daybreak-Toolbox-<AppVersion>-win-setup.exe（per-user 安装，卸载项在 HKCU）
 
-#define AppVersion "v2.0.9"   ; 资产文件名用（/D:AppVersion= 覆盖）
-#define AppVerNum  "2.0.9"   ; Setup 版本号（无 v 前缀，/D:AppVerNum= 覆盖）
+; 注意：脚本内 #define 会覆盖 /D: 命令行参数（Inno 预处理顺序：命令行先、脚本后），
+; 故默认值必须用 #if not defined(...) 保护，CI 的 /D:AppVersion= 才能生效。
+#if not defined(AppVersion)
+#define AppVersion "v2.0.9"   ; 资产文件名用（CI 传 /D:AppVersion=v2.0.10 覆盖）
+#endif
+#if not defined(AppVerNum)
+#define AppVerNum  "2.0.9"   ; Setup 版本号（无 v 前缀，CI 传 /D:AppVerNum= 覆盖）
+#endif
+#if not defined(ExePath)
 ; 相对路径基于脚本目录（packaging/windows/）解析
 #define ExePath    "..\..\dist\DaybreakToolbox.exe"  ; onefile 产物
+#endif
 
 [Setup]
 AppId={{9C7D5E2A-4B1F-4C6E-8A3D-B2E7F05A1C48}}
@@ -56,4 +64,3 @@ Filename: "{app}\DaybreakToolbox.exe"; Description: "Run Daybreak Toolbox now"; 
 
 [Messages]
 SetupAppTitle=Daybreak Toolbox {#AppVersion} Setup
-ReadyDeleteText=
