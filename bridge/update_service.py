@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.6"
+APP_VERSION = "2.0.7"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,12 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.7":
+"""
+1、移除悬浮球功能：原生 Win32 置顶球、ball.get_state / ball.set_topmost / ball.set_hidden 命令与 ball.state 事件、设置页「悬浮球」开关（置顶/隐藏）、全局快捷键 ball:show（显隐切换）、托盘「显示悬浮球」项、config/ball_pos.json 位置持久化全部移除
+2、快捷键旧数据自动迁移：旧版本 config/shortcuts.json 中的 ball:show / ball:hide 条目在读取时静默丢弃，无需手工清理
+3、设置「其他设置」标签页（仅含悬浮球）一并移除；界面与托盘回归纯工具箱形态
+""",
     "v2.0.6":
 """
 1、悬浮球统一为「全局球」：屏幕上的悬浮球只保留 bridge 进程运行的原生置顶球一颗（可拖动到屏幕任意位置、位置记忆、跟随系统深浅色主题、左键聚焦主应用窗口）

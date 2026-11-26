@@ -120,9 +120,9 @@ jobs:
             gh release create "$ver" \
               --title "Daybreak Toolbox $ver" \
               --notes "破晓·工具箱 $ver 多平台安装包（Windows / macOS / Linux，包内含 README）。
-              Windows：解压运行 DaybreakToolbox.exe（托盘 + 悬浮球）；
+              Windows：解压运行 DaybreakToolbox.exe（托盘常驻）；
               macOS：双击 DaybreakToolbox.app（首次 右键→打开 绕过 Gatekeeper）；
-              Linux：解压运行 ./DaybreakToolbox（需系统含 libgtk；悬浮球/托盘仅 Windows 生效）。" \
+              Linux：解压运行 ./DaybreakToolbox（需系统含 libgtk；托盘仅 Windows 生效）。" \
               --target "${{ github.sha }}" || echo "release create raced/skipped"
           fi
           for i in 1 2 3 4 5; do

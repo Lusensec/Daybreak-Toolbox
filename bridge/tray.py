@@ -70,9 +70,8 @@ def _open_url(port: int, path: str) -> None:
     webbrowser.open(f"http://127.0.0.1:{port}{path}")
 
 
-def start_tray(port: int, extra_items: list[tuple[str, object]] | None = None, root: Path | None = None) -> bool:
+def start_tray(port: int, root: Path | None = None) -> bool:
     """启动托盘（daemon 线程）。返回是否成功；失败仅记日志，不抛。
-    extra_items：附加菜单项（label, callback），如 ball 的「显示悬浮球」。
     root：项目根（用于托盘图标取系统 logo；None 走手绘兜底）。"""
     if os.environ.get("DAYBREAK_NO_TRAY") == "1":
         log.info("tray disabled by DAYBREAK_NO_TRAY=1")
@@ -101,17 +100,10 @@ def start_tray(port: int, extra_items: list[tuple[str, object]] | None = None, r
 
             return MenuItem(label, action)
 
-        def _make_extra(label: str, cb) -> MenuItem:
-            def action(icon, item):
-                cb()
-
-            return MenuItem(label, action)
-
         def _exit(icon, item):
-            os._exit(0)  # 托盘/球/桥全进程退出（daemon 线程随进程消失，状态已落盘）
+            os._exit(0)  # 托盘/桥全进程退出（daemon 线程随进程消失，状态已落盘）
 
         items = [_make_page(l, p) for l, p in _TRAY_PAGES]
-        items += [_make_extra(l, c) for l, c in (extra_items or [])]
         items.append(MenuItem("退出破晓工具箱", _exit))
         menu = Menu(*items)
         icon = pystray.Icon("daybreak-toolbox", image, "破晓·工具箱", menu)

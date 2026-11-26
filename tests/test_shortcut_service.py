@@ -20,8 +20,7 @@ def test_get_missing_file_returns_empty():
 
 def test_set_and_get_roundtrip():
     data = {"panel": "Ctrl+Space", "dyn:红队": "Ctrl+1", "fix:首页": "Ctrl+Alt+1",
-            "nav:1": "Ctrl+Shift+1", "tool:红队__扫描器": "Ctrl+Shift+P", "dyn:蓝队": "",
-            "ball:show": "Ctrl+Shift+X", "ball:hide": ""}
+            "nav:1": "Ctrl+Shift+1", "tool:红队__扫描器": "Ctrl+Shift+P", "dyn:蓝队": ""}
     r = set_shortcuts(data)
     assert r["ok"] is True
     assert r["shortcuts"] == data
@@ -31,13 +30,30 @@ def test_set_and_get_roundtrip():
     assert ondisk == data
 
 
-def test_ball_slot_keys():
-    # ball:show / ball:hide 合法（含空串停用）；其它 ball:xxx 与裸 ball 拒绝
-    assert set_shortcuts({"ball:show": "Ctrl+Shift+Y", "ball:hide": ""})["ok"] is True
-    for bad in ("ball:xxx", "ball", "ball:show:extra"):
+def test_ball_slot_keys_removed():
+    # v2.0.7 起悬浮球功能移除：ball:* 槽位不再合法（set 拒绝）
+    for bad in ("ball:show", "ball:hide", "ball:xxx", "ball"):
         with pytest.raises(ShortcutError) as ei:
             set_shortcuts({bad: "Ctrl+1"})
         assert ei.value.code == "SHORTCUT_INVALID"
+
+
+def test_legacy_ball_entries_dropped_on_load():
+    # 旧版本落盘的 ball:* 条目读取时静默丢弃（老用户无需手工清理）
+    target = shortcut_service._CONFIG_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({
+        "panel": "Ctrl+Space",
+        "ball:show": "Ctrl+Shift+X",
+        "ball:hide": "",
+    }), encoding="utf-8")
+    r = get_shortcuts()["shortcuts"]
+    assert "ball:show" not in r and "ball:hide" not in r
+    assert r["panel"] == "Ctrl+Space"
+    # 下次整表保存后 ball 条目自然消失
+    set_shortcuts(r)
+    ondisk = json.loads(target.read_text(encoding="utf-8"))
+    assert "ball:show" not in ondisk and "ball:hide" not in ondisk
 
 
 def test_invalid_slot_key_rejected():

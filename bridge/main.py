@@ -64,7 +64,6 @@ from . import shell_service
 from . import ssh_service
 from . import token as _token
 from .tray import start_tray
-from . import ball as _ball
 
 # ---- 端口探测（8765..8770）----
 _BASE_PORT = 8765
@@ -501,24 +500,6 @@ def _register_builtin_commands() -> None:
     _bus.register("shortcut.get", _shortcut_get)
     _bus.register("shortcut.set", _shortcut_set)
 
-    # ---- 原生悬浮球（工具箱设置「悬浮球」页：置顶 / 隐藏；状态变更广播 ball.state）----
-    async def _ball_get_state(_p, _ws):
-        return await asyncio.to_thread(_ball.get_state)
-
-    async def _ball_set_topmost(p, _ws):
-        st = await asyncio.to_thread(_ball.set_topmost, bool(p.get("on", True)))
-        await _bus.broadcast("ball.state", st)
-        return st
-
-    async def _ball_set_hidden(p, _ws):
-        st = await asyncio.to_thread(_ball.set_hidden, bool(p.get("hidden")))
-        await _bus.broadcast("ball.state", st)
-        return st
-
-    _bus.register("ball.get_state", _ball_get_state)
-    _bus.register("ball.set_topmost", _ball_set_topmost)
-    _bus.register("ball.set_hidden", _ball_set_hidden)
-
     # ---- SSH 终端（config/ssh_hosts.json 主机表 + 常驻 paramiko 会话；会话断开广播 ssh.closed）----
     def _ssh_call(fn, *a, **kw):
         try:
@@ -577,14 +558,13 @@ def _register_builtin_commands() -> None:
 def build_app() -> FastAPI:
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
-        # uvicorn 事件循环 → 翻译 worker / 悬浮球状态钩子（跨线程广播依赖它）
+        # uvicorn 事件循环 → 翻译 / AI / 编解码 worker 的跨线程广播依赖它
         # （原 @app.on_event("startup")，FastAPI 已弃用 → lifespan）
         global _bridge_loop
         _bridge_loop = asyncio.get_running_loop()
-        _ball.set_state_hook(lambda state: _thread_broadcast("ball.state", state))
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.6", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.7", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -680,7 +660,7 @@ import uvicorn
 
 def run_blocking(port: Optional[int] = None) -> None:
     """同步启动 uvicorn（阻塞当前线程）。供 webview 主线程调用。
-    注意：本模式下主线程被 uvicorn 占用，原生悬浮球（需主线程 GUI 循环）不可用；托盘可用。"""
+    注意：本模式下主线程被 uvicorn 占用；托盘可用。"""
     global _current_port
     port = port or find_free_port()
     _current_port = port
@@ -706,7 +686,7 @@ def pick_mode(argv: "list[str]") -> str:
 
 def run_windowed(port: Optional[int] = None) -> None:
     """打包窗口模式（方案 A）：主线程跑 pywebview 原生窗口（Windows=WebView2 / macOS=WKWebView /
-    Linux=WebKitGTK），加载同源桥接 UI；uvicorn / 悬浮球 / 托盘均为 daemon 后台线程。
+    Linux=WebKitGTK），加载同源桥接 UI；uvicorn / 托盘均为 daemon 后台线程。
 
     - 关闭窗口 → 退出全进程（与托盘「退出破晓工具箱」同语义；想服务常驻请用 --service）
     - 窗口引擎不可用（无 WebView2 / 无显示环境等）→ 降级「服务 + 默认浏览器」并保持进程存活
@@ -733,8 +713,7 @@ def run_windowed(port: Optional[int] = None) -> None:
     print(f"[bridge] token: {_token_mod.get_token()}")
 
     _pr = _project_root()
-    ball_ok = _ball.start_ball(port, _pr)
-    start_tray(port, extra_items=_ball.tray_items() if ball_ok else None, root=_pr)
+    start_tray(port, root=_pr)
 
     try:
         import webview
@@ -748,18 +727,17 @@ def run_windowed(port: Optional[int] = None) -> None:
             _threading.Timer(0.5, lambda: webbrowser.open(url)).start()
         except Exception:
             pass
-        _threading.Event().wait()  # 服务模式：保持进程存活（uvicorn/托盘/球为 daemon 线程）
+        _threading.Event().wait()  # 服务模式：保持进程存活（uvicorn/托盘为 daemon 线程）
         return
 
     # 窗口关闭 → 退出全进程（与托盘「退出」同语义）
-    _ball.stop_ball()
     print("[bridge] 窗口已关闭，退出进程（想服务常驻请用 --service 参数启动）")
     os._exit(0)
 
 
 def main() -> None:
     """python -m bridge.main —— 直接启动（前台）。
-    线程模型：uvicorn 后台线程 + 托盘 daemon 线程 + （可用时）主线程跑原生悬浮球 GUI 循环。
+    线程模型：uvicorn 后台线程 + 托盘 daemon 线程。
     打包态默认走窗口模式（run_windowed）；--service / 开发态走本路径。"""
     global _current_port
     import threading as _threading
@@ -773,7 +751,7 @@ def main() -> None:
     port = find_free_port()
     _current_port = port
     if not getattr(sys, "frozen", False):
-        # 开发态：日志输出到 stderr（悬浮球 / bridge 诊断；frozen 态由 run_bootstrap 统一落盘）
+        # 开发态：日志输出到 stderr（bridge 诊断；frozen 态由 run_bootstrap 统一落盘）
         logging.basicConfig(level=logging.INFO,
                             format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     app = build_app()
@@ -804,14 +782,9 @@ def main() -> None:
 
         _threading.Timer(1.2, _auto_open).start()
 
-    # 原生悬浮球：可用时主线程跑 GUI 泵（pywebview 要求 webview.start() 在主线程）
-    _pr = _project_root()
-    if _ball.start_ball(port, _pr):
-        start_tray(port, extra_items=_ball.tray_items(), root=_pr)
-        _ball.run_main_loop()  # 阻塞；右键小球弹菜单（隐藏/置顶/关闭），托盘「显示悬浮球」可再唤起
-    else:
-        start_tray(port, root=_pr)
-        _threading.Event().wait()  # 保持进程存活（uvicorn/托盘为 daemon 线程）
+    # 服务形态：托盘 + 保活（uvicorn/托盘为 daemon 线程，主线程阻塞等待）
+    start_tray(port, root=_project_root())
+    _threading.Event().wait()
 
 
 if __name__ == "__main__":

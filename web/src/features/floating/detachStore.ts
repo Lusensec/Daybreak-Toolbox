@@ -27,7 +27,7 @@ interface DetachState {
   refitFullscreen: (name: string) => void;
   focus: (name: string) => void;
   setHoverTarget: (name: string | null) => void;
-  /** 2000+ 层位（>设置模态 1000、<悬浮球 2100）：zOrder 中越靠后 z 越高 */
+  /** 2000+ 层位（>设置模态 1000）：zOrder 中越靠后 z 越高 */
   zIndexOf: (name: string) => number;
 }
 
@@ -146,7 +146,7 @@ export const useDetachStore = create<DetachState>((set, get) => ({
 
   zIndexOf(name) {
     const i = get().zOrder.indexOf(name);
-    // 2000+ 层位：高于设置模态（z=1000）、低于悬浮球（z=2100）；zOrder 中越靠后 z 越高
+    // 2000+ 层位：高于设置模态（z=1000）；zOrder 中越靠后 z 越高
     return 2000 + Math.max(0, i);
   },
 }));

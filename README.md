@@ -55,16 +55,16 @@ python -m bridge.smoke
 
 | 平台 | 附件 | 说明 |
 | --- | --- | --- |
-| Windows | `Daybreak-Toolbox-<版本>-win-x64.zip` | 解压后运行 `DaybreakToolbox.exe`：**直接弹出原生应用窗口**（v2.0.3 起，WebView2 渲染；托盘常驻 + 桌面悬浮球共存） |
+| Windows | `Daybreak-Toolbox-<版本>-win-x64.zip` | 解压后运行 `DaybreakToolbox.exe`：**直接弹出原生应用窗口**（v2.0.3 起，WebView2 渲染；托盘常驻） |
 | macOS | `Daybreak-Toolbox-<版本>-mac-arm64.zip` / `mac-x64.zip` | 双击 `DaybreakToolbox.app`；首次 右键→打开 绕过 Gatekeeper（窗口形态依赖系统 WebView；缺失时自动降级浏览器） |
-| Linux | `Daybreak-Toolbox-<版本>-linux-x64.zip` | 解压后运行 `./DaybreakToolbox`（需系统含 GTK/WebKit 运行库；无窗口引擎时降级浏览器形态；悬浮球/托盘仅 Windows 生效） |
+| Linux | `Daybreak-Toolbox-<版本>-linux-x64.zip` | 解压后运行 `./DaybreakToolbox`（需系统含 GTK/WebKit 运行库；无窗口引擎时降级浏览器形态；托盘仅 Windows 生效） |
 
 行为说明：
 
-- 程序首次启动会在 **exe 同目录** 生成 `config/`（菜单配置 / 悬浮球位置 / 更新仓库配置）；升级时已有配置不会被覆盖。
+- 程序首次启动会在 **exe 同目录** 生成 `config/`（菜单配置 / 更新仓库配置）；升级时已有配置不会被覆盖。
 - **窗口形态（v2.0.3 起默认）**：exe 启动后弹出应用窗口即完整界面（与浏览器同款 UI）；关闭窗口 = 退出进程（托盘「退出破晓工具箱」同义）。
 - **服务模式**：加参数 `DaybreakToolbox.exe --service`（或窗口引擎不可用时自动降级）→ 无常驻窗口，启动约 1 秒后自动打开默认浏览器访问 **http://127.0.0.1:8765/**（端口被占用时自动 +1，`daybreak.log` 打印实际端口）。
-- Windows：托盘图标右键 →「退出破晓工具箱」结束进程；悬浮球菜单「关闭小球」仅停球不停服务。
+- Windows：托盘图标右键 →「退出破晓工具箱」结束进程。
 - 「设置 → 更新检查」对比 GitHub 仓库 latest Release 与本地版本。
 
 
@@ -144,10 +144,9 @@ Base64 / URL / Unicode / JSON / MD5 / 乱码恢复。
 
 ![临时笔记](images/note.png)
 
-## 8、悬浮球 / 快捷键 / 更新检查
+## 8、快捷键 / 更新检查
 
-- **悬浮球**（Windows 原生）：桌面圆形小球，右键展开/收起菜单、拖拽移动自动保存位置、置顶/隐藏（设置 → 其他设置）；「**页面**」组可一键打开 首页 / AI 对话 / 终端管理 / 编解码 / 汉英翻译 / 临时笔记 的系统页子窗口。
-- **快捷键**（设置 → 快捷键设置）：支持**任意键**（可不带 Ctrl，如 `K`、`F5`、`空格` 或带修饰键的组合）；悬浮球显示/隐藏为单一 toggle 键（按一次显示、再按一次隐藏）。
+- **快捷键**（设置 → 快捷键设置）：支持**任意键**（可不带 Ctrl，如 `K`、`F5`、`空格` 或带修饰键的组合）。
 - **更新检查**（设置 → 更新检查）：对比本地版本与 GitHub 仓库 latest Release，展示更新记录。
 
 # 五、配置文件
@@ -155,7 +154,6 @@ Base64 / URL / Unicode / JSON / MD5 / 乱码恢复。
 | 文件 | 内容 | 是否随仓库 |
 | --- | --- | --- |
 | `config/config.json` | 菜单栏 / 导航栏 / 工具 定义（核心数据） | 是（含你的工具） |
-| `config/ball_pos.json` | 悬浮球位置 + 置顶/隐藏状态 | 是（默认值，运行中自动更新） |
 | `config/ai.json` | AI 模型配置 + 历史轮数（含 API key） | 否（gitignore） |
 | `config/bridge_secrets.json` | 桥接 token + 百度翻译凭证（合并单文件） | 否（gitignore） |
 | `config/ssh_hosts.json` | SSH 主机表（含明文密码） | 否（gitignore，严禁随仓库分发） |
@@ -171,6 +169,11 @@ Base64 / URL / Unicode / JSON / MD5 / 乱码恢复。
 - 工具箱本身是学习研究工具，请仅对你有权限的系统使用
 
 # 七、更新记录
+
+## v2.0.7
+
+1、移除悬浮球功能：原生 Win32 置顶球、`ball.*` WS 命令/事件、设置页「悬浮球」开关与「其他设置」标签页、全局快捷键 `ball:show`、托盘「显示悬浮球」项、`config/ball_pos.json` 位置持久化、球体图标资产全部移除
+2、快捷键旧数据自动迁移：旧版本 `config/shortcuts.json` 中的 `ball:show` / `ball:hide` 条目读取时静默丢弃，无需手工清理
 
 ## v2.0.6
 

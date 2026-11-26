@@ -28,7 +28,7 @@ def _bootstrap_frozen_state() -> None:
     if os.path.isdir(src):
         dst = os.path.join(exe_dir, "config")
         os.makedirs(dst, exist_ok=True)
-        for name in ("config.json", "ball_pos.json", "update.json"):
+        for name in ("config.json", "update.json"):
             src_f = os.path.join(src, name)
             dst_f = os.path.join(dst, name)
             if os.path.isfile(src_f) and not os.path.exists(dst_f):
@@ -36,7 +36,7 @@ def _bootstrap_frozen_state() -> None:
     # 日志：exe 旁 daybreak.log（追加）；console 版保留原句柄，双写
     log_path = os.path.join(exe_dir, "daybreak.log")
     log_f = open(log_path, "a", encoding="utf-8", buffering=1)
-    # logging（ball/bridge 各模块 log）也落同一文件，便于窗口形态诊断（如球体移动/重建）
+    # logging（bridge 各模块 log）也落同一文件，便于窗口形态诊断
     import logging
     _root = logging.getLogger()
     if not any(getattr(h, "stream", None) is log_f for h in _root.handlers):

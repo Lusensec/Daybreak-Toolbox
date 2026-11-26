@@ -2,7 +2,7 @@
 .prompt-mask {
   position: fixed;
   inset: 0;
-  z-index: 3000; /* 高于设置模态(1000)/子窗口(2000+)/悬浮球(2100)：重命名随时可弹 */
+  z-index: 3000; /* 高于设置模态(1000)/子窗口(2000+)：重命名随时可弹 */
   background: rgba(0, 0, 0, 0.45);
   display: flex;
   align-items: center;

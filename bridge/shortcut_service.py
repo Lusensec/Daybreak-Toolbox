@@ -13,12 +13,13 @@
       fix:<菜单名>    第 N 个系统固定菜单栏
       nav:<n>         当前菜单栏下第 n 个导航项（n=1..9，1=首页）
       tool:<菜单>__<工具>  工具快捷键（工具名菜单内唯一）
-      ball:show/hide  显示 / 隐藏 原生悬浮球（经 ball.set_hidden 命令；无默认组合）
   - 组合串规范化格式：[Ctrl+][Alt+][Shift+]<Key>（任意键或组合，Ctrl 非必须；
       须含至少一个普通键，避免与输入法/普通输入冲突；修饰键顺序固定 Ctrl<Alt<Shift）
       * Key ∈ A-Z / 0-9 / F1-F12 / Space
       * 空串 = 该槽位快捷键显式停用（区别于「未设置→用默认」）
   - 原子写：临时文件 + os.replace，防截断。
+  - 遗留兼容（v2.0.7 起）：悬浮球功能已移除；读盘时静默丢弃旧版本 ball:* 槽位条目，
+    老用户 config/shortcuts.json 无需手工清理（下次整表保存时自然重写）。
 
 错误码：SHORTCUT_INVALID（槽位/组合键非法）/ SHORTCUT_CORRUPT（文件损坏）/ INTERNAL
 """
@@ -34,8 +35,8 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_FILE = _PROJECT_ROOT / "config" / "shortcuts.json"
 
-# 槽位键：panel / dyn:x / fix:x / nav:数字 / tool:菜单__工具 / ball:show|hide
-_SLOT_RE = re.compile(r"^(panel|dyn:.+|fix:.+|nav:[0-9]+|tool:.+|ball:(show|hide))$")
+# 槽位键：panel / dyn:x / fix:x / nav:数字 / tool:菜单__工具（v2.0.7 起移除 ball:* 槽位）
+_SLOT_RE = re.compile(r"^(panel|dyn:.+|fix:.+|nav:[0-9]+|tool:.+)$")
 # 组合串：[Ctrl+][Alt+][Shift+]+(F1-F12 | 单字母 | 数字 | Space)——任意键或组合
 # （Ctrl 非必须；须含普通键；修饰键顺序固定 Ctrl<Alt<Shift，与前端 eventCombo 归一化一致）
 _COMBO_RE = re.compile(
@@ -70,14 +71,17 @@ def _atomic_write(path: Path, obj) -> None:
 
 
 def _load_raw() -> dict:
-    """读盘原始 dict；文件缺失 → 空表（首次使用时由 set 创建）。"""
+    """读盘原始 dict；文件缺失 → 空表（首次使用时由 set 创建）。
+    遗留兼容：静默丢弃 v2.0.6 及更早版本写入的 ball:* 槽位条目（悬浮球功能已移除）。"""
     if not _CONFIG_FILE.exists():
         return {}
     try:
         data = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         raise ShortcutError("SHORTCUT_CORRUPT", "config/shortcuts.json 已损坏，请删除后重新设置")
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if not str(k).startswith("ball:")}
 
 
 def validate_shortcuts(shortcuts) -> None:

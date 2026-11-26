@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { X, Plus, Trash2, Pencil, Maximize2, Minimize2, RefreshCw, FolderOpen, Eye, EyeOff, Wrench, Brain, Save, ChevronDown, Languages, Keyboard, Server, Download, Star, Menu, List, Settings, SlidersHorizontal, Sun, Moon, Monitor } from "lucide-react";
+import { X, Plus, Trash2, Pencil, Maximize2, Minimize2, RefreshCw, FolderOpen, Eye, EyeOff, Wrench, Brain, Save, ChevronDown, Languages, Keyboard, Server, Download, Star, Menu, List, Settings, Sun, Moon, Monitor } from "lucide-react";
 import { sendCommand, subscribeEvent } from "../services/ws";
 import { AboutDialog } from "./AboutDialog";
 import { useToast } from "./toast";
@@ -12,10 +12,10 @@ import { useDraggable } from "../hooks/useDraggable";
 import { useResize } from "../hooks/useResize";
 import { KeyCapture } from "../features/shortcuts/KeyCapture";
 import { useShortcutsStore } from "../features/shortcuts/store";
-import { findConflicts, SHORTCUT_FIX_MENUS, SLOT_PANEL, SLOT_BALL_SHOW, defaultToolCombo, slotDyn, slotFix, slotNav, slotTool } from "../features/shortcuts/shortcuts";
+import { findConflicts, SHORTCUT_FIX_MENUS, SLOT_PANEL, defaultToolCombo, slotDyn, slotFix, slotNav, slotTool } from "../features/shortcuts/shortcuts";
 import "./SettingsModal.css";
 
-export type TabKey = "general" | "menus" | "navs" | "tools" | "display" | "ai" | "shortcuts" | "translate" | "terminal" | "misc" | "update";
+export type TabKey = "general" | "menus" | "navs" | "tools" | "display" | "ai" | "shortcuts" | "translate" | "terminal" | "update";
 
 /** 更新检查的固定 GitHub 仓库（「更新设置」已无仓库配置 UI；
  *  必须与 bridge/update_service.DEFAULT_REPO 保持一致 —— 后端回退链的最终兜底）。 */
@@ -74,7 +74,7 @@ function maskSecret(s: string): string {
 /**
  * 工具箱设置模态框（可拖拽/单向拉伸，右侧按钮 / 首页卡 点击打开）。
  * 标签页：
- *  通用设置（默认打开页） → 菜单栏管理 → 导航栏管理 → 工具管理 → 菜单栏展示 → AI模型设置 → 快捷键设置 → 翻译设置 → 终端设置 → 其他设置（悬浮球等）→ 更新检查
+ *  通用设置（默认打开页） → 菜单栏管理 → 导航栏管理 → 工具管理 → 菜单栏展示 → AI模型设置 → 快捷键设置 → 翻译设置 → 终端设置 → 更新检查
  *  - 菜单栏管理页：菜单栏列表（行点击选中 / 改名 / 删除）+ 新增菜单栏行
  *  - 导航栏管理页：菜单栏下拉（选归属）+ 导航列表（行点击选中 / 改名 / 删除）+ 新增导航行
  *  - 工具管理页：菜单/导航 双下拉 + 新增表单 + 按导航过滤列表；改名删除亦可走顶栏右键菜单
@@ -429,35 +429,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   type UpResult = { kind: "idle" } | { kind: "ok"; msg: string } | { kind: "update"; msg: string; url: string } | { kind: "err"; msg: string };
   const [upResult, setUpResult] = useState<UpResult>({ kind: "idle" });
 
-  // ---- 悬浮球状态（原生小球：置顶 / 隐藏；config/ball_pos.json 持久化，ball.state 事件同步）----
-  const [ballAvail, setBallAvail] = useState(false);
-  const [ballTop, setBallTop] = useState(true);
-  const [ballHidden, setBallHidden] = useState(false);
-
-  const refreshBall = useCallback(async () => {
-    try {
-      const r = await sendCommand("ball.get_state", {});
-      setBallAvail(Boolean(r.available));
-      setBallTop(Boolean(r.topmost));
-      setBallHidden(Boolean(r.hidden));
-    } catch {
-      /* bridge 未连接时保持默认 */
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshBall();
-    const un = subscribeEvent("ball.state", (p: unknown) => {
-      const s = p as Record<string, unknown>;
-      if (s && typeof s === "object") {
-        setBallAvail(Boolean(s.available));
-        setBallTop(Boolean(s.topmost));
-        setBallHidden(Boolean(s.hidden));
-      }
-    });
-    return un;
-  }, [refreshBall]);
-
   async function checkUpdate() {
     setUpChecking(true);
     try {
@@ -630,7 +601,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     { key: "shortcuts", label: "快捷键设置", icon: Keyboard },
     { key: "translate", label: "翻译设置", icon: Languages },
     { key: "terminal", label: "终端设置", icon: Server },
-    { key: "misc", label: "其他设置", icon: SlidersHorizontal },
     { key: "update", label: "更新检查", icon: Download },
   ];
 
@@ -1233,14 +1203,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               </div>
 
               <div className="sc-group">
-                <div className="sc-group__title">悬浮球显隐（同一按键 显示↔隐藏 切换；无默认组合，点按键录制任意键/组合，✕ 停用）</div>
-                <div className="sc-row">
-                  <span className="sc-row__label">悬浮球显示/隐藏</span>
-                  <KeyCapture slotKey={SLOT_BALL_SHOW} dynMenus={dynNames} fixMenus={FIXED_MENUS} conflict={scConflicts.has(SLOT_BALL_SHOW)} />
-                </div>
-              </div>
-
-              <div className="sc-group">
                 <div className="sc-group__title">动态菜单栏（用户菜单，默认 Ctrl+N）</div>
                 {menus.map((m, i) => (
                   <div className="sc-row" key={m.name}>
@@ -1421,60 +1383,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   </label>
                 ))}
               </div>
-            </div>
-          ) : null}
-
-          {/* ================= 其他设置（基础设置集合：当前含 悬浮球，后续基础设置归入此处） =================
-              悬浮球（原生置顶小球：置顶开关 + 隐藏开关；原生球不可用时仅提示）
-              状态源 config/ball_pos.json（bridge 持久化）；变更广播 ball.state 实时同步 */}
-          {tab === "misc" ? (
-            <div className="settings-display">
-              <h3 className="settings-sub__title">其他设置 <span className="settings-sub__hint">（基础设置集合，后续更多基础设置将归入此处）</span></h3>
-
-              <h3 className="settings-sub__title">悬浮球 <span className="settings-sub__hint">（全局置顶球由 bridge 进程运行，可拖动到屏幕任意位置、位置记忆；v2.0.6 起页内小球已移除，屏幕上仅此一颗）</span></h3>
-
-              {!ballAvail ? (
-                <div className="menu-list__empty">原生悬浮球当前不可用（bridge 未运行 / 依赖缺失），设置保存后 bridge 重启时生效。</div>
-              ) : (
-                <>
-                  <div className="menu-vis-group">
-                    <div className="menu-vis-group__title">显示与层级</div>
-                    <label className="menu-vis-row">
-                      <input
-                        type="checkbox"
-                        checked={ballTop}
-                        onChange={(e) => void run(
-                          () => sendCommand("ball.set_topmost", { on: e.target.checked }),
-                          `悬浮球${e.target.checked ? "已置顶在最前" : "已取消置顶"}`
-                        )}
-                      />
-                      <span className="menu-vis-row__name">置顶在最前</span>
-                      <span className="menu-vis-row__hint">小球始终浮于其他窗口之上</span>
-                    </label>
-                    <label className="menu-vis-row">
-                      <input
-                        type="checkbox"
-                        checked={ballHidden}
-                        onChange={(e) => void run(
-                          () => sendCommand("ball.set_hidden", { hidden: e.target.checked }),
-                          e.target.checked ? "悬浮球已隐藏" : "悬浮球已显示"
-                        )}
-                      />
-                      <span className="menu-vis-row__name">隐藏悬浮球</span>
-                      <span className="menu-vis-row__hint">隐藏后可在托盘「显示悬浮球」或取消勾选恢复</span>
-                    </label>
-                  </div>
-
-                  <div className="menu-vis-group">
-                    <div className="menu-vis-group__title">操作提示</div>
-                    <div className="menu-vis-row">
-                      <span className="menu-vis-row__hint" style={{ flex: 1 }}>
-                        原生小球：左键打开工具箱 · 拖动换位 · 右键弹出菜单（隐藏 / 置顶·取消置顶 / 关闭）
-                      </span>
-                    </div>
-                  </div>
-                </>
-              )}
             </div>
           ) : null}
 

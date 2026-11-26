@@ -6,7 +6,7 @@ import { sendCommand } from "../../services/ws";
 import { useToastStore } from "../../components/toast";
 import { useSettingsModal } from "../../store/settingsModal";
 import { useShortcutsStore } from "./store";
-import { allSlots, effectiveCombo, eventCombo, SLOT_PANEL, SLOT_BALL_SHOW, toolDefaults } from "./shortcuts";
+import { allSlots, effectiveCombo, eventCombo, SLOT_PANEL, toolDefaults } from "./shortcuts";
 
 /** 系统固定菜单栏 → 路由（与 App.tsx 一致） */
 const FIX_ROUTES: Record<string, string> = {
@@ -67,18 +67,6 @@ function dispatchSlot(slot: string, st: ReturnType<typeof useMenuStore.getState>
   if (slot === SLOT_PANEL) {
     st.clearActive();
     navigate("/");
-    return;
-  }
-
-  if (slot === SLOT_BALL_SHOW) {
-    // 悬浮球显隐切换：读当前状态 → 取反设置（非 Windows 平台命令仍成功但 available=false → 提示而非报错）
-    void sendCommand("ball.get_state", {})
-      .then((r) => sendCommand("ball.set_hidden", { hidden: !Boolean((r as { hidden?: boolean }).hidden) }))
-      .then((r) => {
-        if (r.available === false) toast.push("info", "当前平台无原生悬浮球（仅 Windows 桌面模式）");
-        else toast.push("ok", (r as { hidden?: boolean }).hidden ? "悬浮球已隐藏" : "悬浮球已显示");
-      })
-      .catch((err) => toast.push("err", `悬浮球操作失败：${err instanceof Error ? err.message : String(err)}`));
     return;
   }
 
