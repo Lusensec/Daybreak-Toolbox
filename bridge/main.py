@@ -598,7 +598,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.12", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.13", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
