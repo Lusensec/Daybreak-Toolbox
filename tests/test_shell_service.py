@@ -197,12 +197,19 @@ def test_ps_concurrent_exec_serialized():
 def test_decode_bytes_chain():
     """cmd/PS 泵共用解码链：UTF-8 严格 → locale 严格 → replace（任何字节流不抛）。
 
-    无控制台环境（分离 Popen）下 PS host 管道退回系统码页（本机 GBK），
+    无控制台环境（分离 Popen）下 PS host 管道退回系统码页（中文机 GBK），
     此链路保证有/无控制台两种宿主环境中文都还原正确。"""
+    import locale
     f = shell_service._decode_bytes
     assert f("目录".encode("utf-8")) == "目录"          # 真实 UTF-8 输出（本机 cmd dir）
     assert f("bridge .gitignore".encode("ascii")) == "bridge .gitignore"  # 纯 ASCII 原样
-    assert f("以太网适配器".encode("gbk")) == "以太网适配器"  # 无控制台 host 的 GBK 管道（locale 档）
+    gbk_bytes = "以太网适配器".encode("gbk")
+    pref = locale.getpreferredencoding(False).lower()
+    if "gbk" in pref or "936" in pref:
+        assert f(gbk_bytes) == "以太网适配器"            # GBK locale（中文 dev 机）：locale 档还原
+    else:
+        # en-US 等非 GBK locale（CI runner）：GBK 字节走 locale/replace 兜底 —— 关键契约是「不抛」
+        assert isinstance(f(gbk_bytes), str)
     assert "\ufffd" in f(b"\xff\xfe\xfb")                # 杂字节 → replace 兜底，不抛异常
     assert f(b"") == "" and f(None) == ""
 
