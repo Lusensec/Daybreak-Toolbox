@@ -210,7 +210,25 @@ def test_decode_bytes_chain():
     else:
         # en-US 等非 GBK locale（CI runner）：GBK 字节走 locale/replace 兜底 —— 关键契约是「不抛」
         assert isinstance(f(gbk_bytes), str)
-    assert "\ufffd" in f(b"\xff\xfe\xfb")                # 杂字节 → replace 兜底，不抛异常
+    # replace 兜底档：构造「UTF-8 与当前 locale 双非法」字节序列（GBK 系有非法字节可验证；
+    # CP1252 等 8 位全合法 codec 该档不可达 → 只断言不抛）
+    g: bytes | None = None
+    for cand in (b"\xff\xfe\xfb", b"\x80", b"\xfc", b"\x81"):
+        try:
+            cand.decode("utf-8", "strict")
+            continue
+        except UnicodeDecodeError:
+            pass
+        try:
+            cand.decode(locale.getpreferredencoding(False), "strict")
+            continue
+        except (UnicodeDecodeError, LookupError):
+            g = cand
+            break
+    if g is not None:
+        assert "\ufffd" in f(g)                          # replace 档生效：杂字节出 \ufffd 不抛
+    else:
+        assert isinstance(f(b"\xff\xfe\xfb"), str)       # locale 全字节合法：不抛即可
     assert f(b"") == "" and f(None) == ""
 
 
