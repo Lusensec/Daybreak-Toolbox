@@ -15,7 +15,35 @@ permissions:
   contents: write
 
 jobs:
+  # v2.0.14 起：测试门禁 —— 全量 pytest + 前端构建，先于 5 个平台构建跑（构建 job 以 needs 依赖它）
+  tests:
+    runs-on: windows-latest  # 测试含 Windows 专有单测（ctypes/win32 窗口几何），必须 Windows runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install bridge dependencies
+        run: pip install -r requirements.txt pytest
+
+      - name: Run pytest
+        run: python -m pytest -q
+
+      - name: Build web frontend (vite → web/dist)
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
   build:
+    needs: tests
     strategy:
       fail-fast: false
       matrix:

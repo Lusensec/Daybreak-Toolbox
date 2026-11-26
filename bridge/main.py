@@ -69,6 +69,13 @@ from .tray import start_tray
 _BASE_PORT = 8765
 _MAX_RETRY = 5
 
+# ---- v2.0.14 启动计时：各阶段耗时（ms）打 [perf] 行进 daybreak.log（启动优化的数据基线）----
+_PERF_T0 = time.perf_counter()
+
+
+def _perf(stage: str) -> None:
+    print(f"[perf] {stage} {int((time.perf_counter() - _PERF_T0) * 1000)}ms")
+
 
 def find_free_port(base: int = _BASE_PORT, retries: int = _MAX_RETRY) -> int:
     for offset in range(retries):
@@ -598,7 +605,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.13", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.14", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -740,22 +747,31 @@ def _active_window():
 
 
 def window_rect() -> Optional[dict]:
-    """窗口位置/尺寸（逻辑像素）；不可用返回 None。web 端以此基准驱动 move/resize。"""
+    """窗口位置/尺寸（逻辑像素，主屏基准虚拟桌面；v2.0.14 按 per-monitor scale 精确换算——
+    窗口在副屏/混合缩放时不再漂移）。不可用返回 None。web 端以此基准驱动 move/resize。"""
     w = _active_window()
     if w is None:
         return None
     try:
+        phys = _get_window_phys(w)
+        if phys:
+            lx, ly, lw, lh = _physical_to_logical(*phys, _monitor_info_safe())
+            return {"x": lx, "y": ly, "width": lw, "height": lh}
         return {"x": int(w.x), "y": int(w.y), "width": int(w.width), "height": int(w.height)}
     except Exception:
         return None
 
 
 def move_window(x: int, y: int) -> dict:
+    """移动窗口（v2.0.14：单次原子 SetWindowPos，位置走 per-monitor 逻辑→物理换算，
+    尺寸保持当前物理值不变；替代旧 pywebview w.move 两步路径）。"""
     w = _active_window()
     if w is None:
         return {"ok": False, "error": "window unavailable"}
     try:
-        w.move(int(x), int(y))
+        mons = _monitor_info_safe()
+        px, py, _pw, _ph = _logical_to_physical(int(x), int(y), 0, 0, mons)
+        _set_window_geometry_phys(w, px, py, 0, 0, keep_size=True)
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -772,7 +788,12 @@ def resize_window(width, height) -> dict:
         return {"ok": False, "error": "window unavailable"}
     cw, ch = _clamp_window_size(width, height)
     try:
-        w.resize(cw, ch)  # 默认 fix point = 左上角（NORTH|WEST）：右下角手柄放大/缩小
+        # v2.0.14：原子 SetWindowPos（旧 pywebview w.resize 两步路径的快连发隐患一并消除）；
+        # 位置保持当前物理值，逻辑尺寸 × 当前所在显示器 scale 换算
+        mons = _monitor_info_safe()
+        phys = _get_window_phys(w) or (0, 0, int(cw), int(ch))
+        s_anchor = _monitor_scale_at(phys[0], phys[1], mons)
+        _set_window_geometry_phys(w, phys[0], phys[1], int(round(cw * s_anchor)), int(round(ch * s_anchor)))
         return {"ok": True, "width": cw, "height": ch}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -781,9 +802,11 @@ def resize_window(width, height) -> dict:
 _MAX_STATE = {"maximized": False, "saved": None}
 
 
-def _win_work_areas() -> "list[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]]":
-    """各显示器 (物理边界, 物理工作区)。DPI aware 进程里 EnumDisplayMonitors/GetMonitorInfoW
-    返回物理坐标；move/resize 入参（pywebview 逻辑）× 窗口 scale = 物理 → 同空间可比。"""
+def _monitor_info() -> "list[dict]":
+    """各显示器信息（v2.0.14 混合 DPI 修复）：{mon:物理边界, work:物理工作区, primary:bool, scale:自身缩放}。
+
+    Per-Monitor-DPI aware 进程里 EnumDisplayMonitors/GetMonitorInfoW 返回物理坐标；
+    每屏 scale 用 GetDpiForMonitor（MMD 精确值），任何环节失败回退窗口 GetDpiForWindow。"""
     import ctypes
     user32 = ctypes.windll.user32
 
@@ -795,7 +818,7 @@ def _win_work_areas() -> "list[tuple[tuple[int, int, int, int], tuple[int, int, 
         _fields_ = [("cbSize", ctypes.c_uint32), ("rcMonitor", RECT),
                     ("rcWork", RECT), ("dwFlags", ctypes.c_uint32)]
 
-    mons: "list[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]]" = []
+    raw: "list[tuple[object, tuple, tuple, bool]]" = []
 
     def cb(hMon, _hdc, _lprc, _dw):
         mi = MONITORINFO()
@@ -805,12 +828,140 @@ def _win_work_areas() -> "list[tuple[tuple[int, int, int, int], tuple[int, int, 
                mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top)
         work = (mi.rcWork.left, mi.rcWork.top,
                 mi.rcWork.right - mi.rcWork.left, mi.rcWork.bottom - mi.rcWork.top)
-        mons.append((mon, work))
+        raw.append((hMon, mon, work, bool(mi.dwFlags & 1)))
         return True
 
     _cb_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong)
     user32.EnumDisplayMonitors(None, None, _cb_type(cb), None)
-    return mons
+
+    fallback = _window_dpi_scale()  # 窗口 scale 作兜底（主屏单屏常见 1.0/1.25）
+    out: "list[dict]" = []
+    for hMon, mon, work, is_primary in raw:
+        out.append({"mon": mon, "work": work, "primary": is_primary,
+                    "scale": _monitor_scale(hMon, fallback)})
+    return out
+
+
+def _monitor_info_safe() -> "list[dict]":
+    """_monitor_info 的异常安全版（非 Windows / 枚举失败 → []，调用方走降级路径）。"""
+    try:
+        return _monitor_info()
+    except Exception:
+        return []
+
+
+def _monitor_scale(hMon, fallback: float = 1.0) -> float:
+    """单显示器 scale（GetDpiForMonitor / 96；Win10+ 有，异常/不支持回退 fallback）。"""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        dpi = ctypes.c_uint32()
+        r = user32.GetDpiForMonitor(hMon, 0, ctypes.byref(dpi), None)  # MDT_EFFECTIVEDPI = 0
+        if r == 0 and dpi.value >= 96:
+            return dpi.value / 96.0
+    except Exception:
+        pass
+    return float(fallback)
+
+
+def _win_work_areas() -> "list[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]]":
+    """各显示器 (物理边界, 物理工作区)。兼容旧调用/单测契约（tuple 形式）。"""
+    return [(m["mon"], m["work"]) for m in _monitor_info_safe()]
+
+
+# ---- v2.0.14 混合 DPI 坐标模型（纯函数，可单测；mons 为 _monitor_info 输出）----
+# 模型（Windows 真实行为）：逻辑虚拟桌面以主屏物理原点为 (0,0)；
+# 显示器 m 的逻辑位置 = (L_m/s_p, T_m/s_p)（s_p = 主屏 scale，位置按主屏比例映射），
+# 逻辑尺寸 = (W_m/s_m, H_m/s_m)（自身 scale）。窗口尺寸按其左上角所在显示器的 scale 换算。
+
+def _pick_logical_monitor(x, y, w, h, mons, sp) -> "dict | None":
+    """逻辑左上角（退化：中心 → 主屏）落在哪个显示器。纯函数。"""
+    pts = [(x, y)]
+    if w and h:
+        pts.append((x + w / 2.0, y + h / 2.0))
+    for px, py in pts:
+        for m in mons:
+            L, T, W, H = m["mon"]
+            s = float(m.get("scale") or sp) or 1.0
+            ll, lt = L / sp, T / sp
+            if ll <= px < ll + W / s and lt <= py < lt + H / s:
+                return m
+    return next((m for m in mons if m.get("primary")), None)
+
+
+def _pick_physical_monitor(px, py, pw, ph, mons) -> "dict | None":
+    """物理左上角（退化：中心 → 主屏）落在哪个显示器。纯函数。"""
+    pts = [(px, py)]
+    if pw and ph:
+        pts.append((px + pw / 2.0, py + ph / 2.0))
+    for cx, cy in pts:
+        for m in mons:
+            L, T, W, H = m["mon"]
+            if L <= cx < L + W and T <= cy < T + H:
+                return m
+    return next((m for m in mons if m.get("primary")), None)
+
+
+def _logical_to_physical(x, y, w, h, mons) -> "tuple[int, int, int, int]":
+    """逻辑坐标（浏览器 screenX/screenY 同空间，主屏基准）→ 目标显示器物理坐标（SetWindowPos 入参）。
+    锚点 = 逻辑左上角所在显示器：phys = L + (x − L/s_p) × s_m。无显示器信息 → 按主屏 scale 直乘（单屏退化）。"""
+    if not mons:
+        return int(round(x)), int(round(y)), int(round(w)), int(round(h))
+    primary = next((m for m in mons if m.get("primary")), mons[0])
+    sp = float(primary.get("scale") or 1.0) or 1.0
+    target = _pick_logical_monitor(x, y, w, h, mons, sp)
+    if target is None:
+        s = sp
+        return (int(round(x * s)), int(round(y * s)), int(round(w * s)), int(round(h * s)))
+    L, T, W, H = target["mon"]
+    s = float(target.get("scale") or sp) or 1.0
+    return (int(round(L + (x - L / sp) * s)),
+            int(round(T + (y - T / sp) * s)),
+            int(round(w * s)),
+            int(round(h * s)))
+
+
+def _physical_to_logical(px, py, pw, ph, mons) -> "tuple[int, int, int, int]":
+    """窗口物理矩形（GetWindowRect）→ 逻辑坐标（_logical_to_physical 的逆；window_rect / 最大化判定用）。
+    无显示器信息 → 主屏 scale 直除（单屏退化 = 旧行为）。"""
+    if not mons:
+        return int(round(px)), int(round(py)), int(round(pw)), int(round(ph))
+    primary = next((m for m in mons if m.get("primary")), mons[0])
+    sp = float(primary.get("scale") or 1.0) or 1.0
+    target = _pick_physical_monitor(px, py, pw, ph, mons)
+    if target is None:
+        s = sp
+        return (int(round(px / s)), int(round(py / s)), int(round(pw / s)), int(round(ph / s)))
+    L, T, W, H = target["mon"]
+    s = float(target.get("scale") or sp) or 1.0
+    return (int(round(L / sp + (px - L) / s)),
+            int(round(T / sp + (py - T) / s)),
+            int(round(pw / s)),
+            int(round(ph / s)))
+
+
+def _get_window_phys(w) -> "tuple[int, int, int, int] | None":
+    """窗口物理矩形（GetWindowRect；失败 None）。"""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+
+        class _R(ctypes.Structure):
+            _fields_ = [("l", ctypes.c_long), ("t", ctypes.c_long),
+                        ("r", ctypes.c_long), ("b", ctypes.c_long)]
+
+        rc = _R()
+        if not user32.GetWindowRect(_handle_int(w), ctypes.byref(rc)):
+            return None
+        return (rc.l, rc.t, rc.r - rc.l, rc.b - rc.t)
+    except Exception:
+        return None
+
+
+def _monitor_scale_at(px, py, mons) -> float:
+    """物理点 (px, py) 所在显示器 scale（回退主屏 → 1.0）。"""
+    m = _pick_physical_monitor(px, py, 0, 0, mons) or next((x for x in mons if x.get("primary")), None)
+    return float(m.get("scale") or 1.0) if m else 1.0
 
 
 import threading as _threading
@@ -818,24 +969,34 @@ import threading as _threading
 _geo_lock = _threading.Lock()
 
 
-def _set_window_geometry(w, x, y, ww, hh) -> None:
-    """单次原子 SetWindowPos（位置+大小一次提交）应用窗口几何（move/resize 入参空间，×窗口 scale → 物理）。
+def _set_window_geometry_phys(w, px, py, pw, ph, keep_size: bool = False) -> None:
+    """单次原子 SetWindowPos（**物理**入参；位置+大小一次提交）。
     为什么不用 pywebview 的 w.move()+w.resize() 两步：
     - 两步跨线程 SetWindowPos 快速连发时，WinForms UI 线程未消化完上一笔 WM_MOVE/WM_SIZE，
       第二笔被丢弃/半应用（v2.0.10 冒烟实测：快连点还原不生效，慢速则正常）；
     - 后端 resize 内部读 Location 决定固定点，跨线程读到旧值会把窗口钉回错误位置。
-    串行锁 + 120ms 落定延时保证 UI 线程消化完再放行下一笔；ShowWindow(Normal) 清残留 showCmd。"""
+    串行锁 + 120ms 落定延时保证 UI 线程消化完再放行下一笔；ShowWindow(Normal) 清残留 showCmd。
+    keep_size=True 时忽略 pw/ph，保持窗口当前物理尺寸（move 用）。"""
+    import ctypes
+    import time
     with _geo_lock:
-        import ctypes
-        import time
         user32 = ctypes.windll.user32
         handle = _handle_int(w)
-        scale = _window_dpi_scale()
-        # SWP_NOZORDER(0x04) | SWP_SHOWWINDOW(0x40) | SWP_NOACTIVATE(0x10)
-        user32.SetWindowPos(handle, None, int(x * scale), int(y * scale),
-                            int(ww * scale), int(hh * scale), 0x04 | 0x40 | 0x10)
+        if keep_size:
+            cur = _get_window_phys(w)
+            pw, ph = (cur[2], cur[3]) if cur else (int(pw), int(ph))
+        user32.SetWindowPos(handle, None, int(px), int(py), int(pw), int(ph), 0x04 | 0x40 | 0x10)
         user32.ShowWindow(handle, 1)  # SW_SHOWNORMAL：清残留 Maximized/Minimized 状态
         time.sleep(0.12)  # 让 UI 线程消化 WM_MOVE/WM_SIZE，下一笔才不会被吞
+
+
+def _set_window_geometry(w, x, y, ww, hh) -> None:
+    """**逻辑**入参（web 端 screenX/screenY 同空间，主屏基准）的窗口几何应用：
+    v2.0.14 经 per-monitor scale 模型换算成物理后原子提交（混合 DPI 跨屏不再漂移；
+    无显示器信息时退化为单屏主 scale 直乘 = 旧行为）。"""
+    mons = _monitor_info_safe()
+    px, py, pw, ph = _logical_to_physical(x, y, ww, hh, mons)
+    _set_window_geometry_phys(w, px, py, pw, ph)
 
 
 def _handle_int(w) -> int:
@@ -860,38 +1021,25 @@ def _window_dpi_scale() -> float:
 
 
 def _win_maximize_target():
-    """窗口所在显示器工作区（move/resize 入参 = 物理工作区 ÷ 窗口 scale）；**永不返回 None**：
-    枚举失败时回退主屏全屏（GetSystemMetrics 物理值 ÷ 1.0）——Windows 路径不使用原生
-    w.maximize()（无边框原生最大化 → showCmd=Maximized，其后紧跟的手动 SetWindowPos 会被
-    Windows 忽略 = v2.0.9「第二次点击不响应」的根因）。"""
+    """窗口所在显示器工作区的**逻辑**目标（v2.0.14：per-monitor scale 精确换算；
+    旧版 物理÷窗口scale 在混合 DPI 下漂移）。**永不返回 None**：
+    枚举失败时回退主屏全屏（GetSystemMetrics 物理值 → 主屏 scale 换算）。Windows 路径不使用
+    原生 w.maximize()（无边框原生最大化 → showCmd=Maximized，其后紧跟的手动 SetWindowPos
+    会被 Windows 忽略 = v2.0.9「第二次点击不响应」的根因）。"""
+    mons = _monitor_info_safe()
     w = _active_window()
-    r = window_rect()
-    scale = _window_dpi_scale()
-    if w is None or r is None:
-        return None
-    mons = _win_work_areas()
     if mons:
-        # 窗口物理中心 = 回读中心 × 窗口 scale（回读值即 物理÷scale）
-        cx_phys = (r["x"] + r["width"] // 2) * scale
-        cy_phys = (r["y"] + r["height"] // 2) * scale
-        pick = None
-        for mon, _work in mons:
-            ml, mt, mw, mh = mon
-            # ±20% 容差命中（跨屏中心歧义时取先命中者；主屏在前）
-            if ml - mw * 0.2 <= cx_phys <= ml + mw * 1.2 and mt - mh * 0.2 <= cy_phys <= mt + mh * 1.2:
-                pick = (mon, _work)
-                break
-        if pick is None:
-            pick = mons[0]
-        _mon, work = pick
-        wl, wt, ww, wh = work
-        return (int(wl / scale), int(wt / scale), int(ww / scale), int(wh / scale))
-    # 兜底：主屏全屏（GetSystemMetrics 物理值 ÷1.0；主屏 100% 时精确，125% 时略大——可接受）
+        phys = _get_window_phys(w) if w is not None else None
+        pick = _pick_physical_monitor(*phys, mons) if phys else next((m for m in mons if m.get("primary")), mons[0])
+        wl, wt, ww, wh = pick["work"]
+        return _physical_to_logical(wl, wt, ww, wh, mons)
+    # 兜底：主屏全屏（物理值 → 逻辑）
     import ctypes
     user32 = ctypes.windll.user32
     sw = user32.GetSystemMetrics(0)  # SM_CXSCREEN（主屏物理宽）
     sh = user32.GetSystemMetrics(1)  # SM_CYSCREEN（主屏物理高）
-    return (0, 0, sw, sh)
+    sp = float(next((m.get("scale") for m in mons if m.get("primary")), 1.0)) or 1.0
+    return (0, 0, int(round(sw / sp)), int(round(sh / sp)))
 
 
 def _is_maximized_geometry(rect, target, tol=8) -> bool:
@@ -991,6 +1139,7 @@ def run_windowed(port: Optional[int] = None) -> None:
 
     from .menu_service import project_root as _project_root
 
+    _perf("windowed.entry")
     port = port or find_free_port()
     _current_port = port
     app = build_app()
@@ -1004,6 +1153,7 @@ def run_windowed(port: Optional[int] = None) -> None:
             break
         srv.join(0.1)
     url = f"http://127.0.0.1:{port}/"
+    _perf("windowed.uvicorn_ready" if server.started else "windowed.uvicorn_degraded")
     if not server.started:
         # v2.0.12：10s 内桥接未就绪（端口竞态/异常）→ 不继续开空白窗口，降级浏览器模式
         print(f"[bridge] 警告：桥接服务 10s 内未就绪（should_exit={server.should_exit}），"
@@ -1020,8 +1170,10 @@ def run_windowed(port: Optional[int] = None) -> None:
 
     try:
         import webview
+        _perf("windowed.before_window")  # 距 uvicorn ready 的间隔 ≈ build_app + 托盘线程化后的准备开销
         webview.create_window("破晓·工具箱", url, width=1280, height=800,
                               resizable=True, min_size=(960, 600), frameless=True)
+        _perf("windowed.window_created")
         webview.start()  # 阻塞：主线程窗口消息循环；窗口关闭后返回
     except Exception as e:
         print(f"[bridge] 窗口模式不可用（{type(e).__name__}: {e}）；降级服务模式，用默认浏览器打开界面")
@@ -1059,6 +1211,7 @@ def main() -> None:
 
     port = find_free_port()
     _current_port = port
+    _perf("service.entry")
     if not getattr(sys, "frozen", False):
         # 开发态：日志输出到 stderr（bridge 诊断；frozen 态由 run_bootstrap 统一落盘）
         logging.basicConfig(level=logging.INFO,
@@ -1077,9 +1230,11 @@ def main() -> None:
         srv.join(0.1)
     if not server.started:
         # v2.0.12：桥接未就绪警告（托盘/进程仍存活，uvicorn 稍后可能恢复；不静默）
+        _perf("service.uvicorn_degraded")
         print(f"[bridge] 警告：桥接服务 10s 内未就绪（should_exit={server.should_exit}）；"
               f"进程/托盘保持，界面暂不可用")
     else:
+        _perf("service.uvicorn_ready")
         print(f"[bridge] listening on 127.0.0.1:{port}")
     print(f"[bridge] token: {_token_mod.get_token()}")
     print(f"[bridge] 界面地址 http://127.0.0.1:{port}/ （托盘「打开首页」/ 浏览器手动访问亦可）")

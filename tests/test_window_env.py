@@ -88,3 +88,61 @@ def test_win_work_areas_lists_monitors():
     assert work[2] > 0 and work[3] > 0
     # 工作区 ⊆ 显示器边界（任务栏可能吃掉一边）
     assert work[2] <= mon[2] + 4 and work[3] <= mon[3] + 4
+
+
+# ---- v2.0.14 混合 DPI 坐标模型（纯函数单测；mons 为 _monitor_info 的 dict 形式）----
+# 双屏合成拓扑：主屏 1920×1080 @125%（work 1920×1020），副屏 1600×900 @100% 物理右接
+# 逻辑几何：主屏逻辑宽 = 1920/1.25 = 1536；副屏逻辑左缘 = 1920/1.25 = 1536，逻辑尺寸 1600×900
+_MIXED = [
+    {"mon": (0, 0, 1920, 1080), "work": (0, 0, 1920, 1020), "primary": True, "scale": 1.25},
+    {"mon": (1920, 0, 1600, 900), "work": (1920, 0, 1600, 900), "primary": False, "scale": 1.0},
+]
+
+
+def test_logical_to_physical_mixed_dpi():
+    """逻辑→物理：主屏内 ×1.25；副屏内按 副屏自身 scale ×1.0 + 物理原点偏移。"""
+    # 主屏：逻辑 (100,100,800,600) → 物理 (125,125,1000,750)
+    assert bmain._logical_to_physical(100, 100, 800, 600, _MIXED) == (125, 125, 1000, 750)
+    # 副屏：逻辑 x=2000（副屏逻辑左缘 1536 起）→ 物理 1920 + (2000-1536)×1.0 = 2384
+    assert bmain._logical_to_physical(2000, 100, 400, 300, _MIXED) == (2384, 100, 400, 300)
+
+
+def test_physical_to_logical_mixed_dpi():
+    """物理→逻辑（GetWindowRect 回读换算）：副屏物理 (2384,100) → 逻辑 (2000,100)。"""
+    assert bmain._physical_to_logical(2384, 100, 400, 300, _MIXED) == (2000, 100, 400, 300)
+    assert bmain._physical_to_logical(125, 125, 1000, 750, _MIXED) == (100, 100, 800, 600)  # 主屏对称
+
+
+def test_mixed_dpi_roundtrip():
+    """逻辑→物理→逻辑 往返恒等（拖拽/边缘缩放不漂移的数学保证）。"""
+    for x, y, w, h in [(100, 100, 800, 600), (2000, 100, 400, 300),
+                       (1400, 50, 1200, 700), (3100, 200, 500, 400)]:
+        px, py, pw, ph = bmain._logical_to_physical(x, y, w, h, _MIXED)
+        assert bmain._physical_to_logical(px, py, pw, ph, _MIXED) == (x, y, w, h), (x, y, w, h)
+
+
+def test_span_window_anchor_top_left_monitor():
+    """跨屏窗口（逻辑 1400 起宽 1200 → 越过副屏逻辑左缘 1536）：锚定左上角所在主屏 scale。"""
+    m = bmain._pick_logical_monitor(1400, 50, 1200, 700, _MIXED, _MIXED[0]["scale"])
+    assert m is not None and m.get("primary") is True
+
+
+def test_single_monitor_degrades_to_scale_multiply():
+    """单屏退化：L=T=0 → 逻辑×scale=物理（与 v2.0.10 旧行为一致，不回退）。"""
+    mons = [{"mon": (0, 0, 1920, 1080), "work": (0, 0, 1920, 1020), "primary": True, "scale": 1.25}]
+    assert bmain._logical_to_physical(100, 100, 800, 600, mons) == (125, 125, 1000, 750)
+    assert bmain._physical_to_logical(125, 125, 1000, 750, mons) == (100, 100, 800, 600)
+
+
+def test_no_monitor_info_identity_fallback():
+    """枚举失败（mons=[]）→ 恒等映射（不抛异常，单屏 100% 时精确）。"""
+    assert bmain._logical_to_physical(100, 100, 800, 600, []) == (100, 100, 800, 600)
+    assert bmain._physical_to_logical(100, 100, 800, 600, []) == (100, 100, 800, 600)
+
+
+def test_maximize_target_mixed_dpi():
+    """副屏/主屏工作区 → 逻辑最大化目标（主屏任务栏遮挡 60px：1020/1.25=816）。"""
+    wl, wt, ww, wh = _MIXED[1]["work"]
+    assert bmain._physical_to_logical(wl, wt, ww, wh, _MIXED) == (1536, 0, 1600, 900)
+    wl, wt, ww, wh = _MIXED[0]["work"]
+    assert bmain._physical_to_logical(wl, wt, ww, wh, _MIXED) == (0, 0, 1536, 816)

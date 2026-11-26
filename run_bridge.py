@@ -15,6 +15,10 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time as _time
+
+# v2.0.14 启动计时 T0：frozen 进程里第一行执行的 Python（模块导入前）
+_BOOT_T0 = _time.perf_counter()
 
 
 def _LogStream(io, logger):
@@ -107,6 +111,8 @@ def _bootstrap_frozen_state() -> None:
 
 def main() -> None:
     _bootstrap_frozen_state()
+    print(f"[perf] bootstrap {int((_time.perf_counter() - _BOOT_T0) * 1000)}ms "
+          f"(frozen 解压 + config 种子 + 日志初始化)")
     try:
         from bridge.main import main as _bridge_main
         _bridge_main()

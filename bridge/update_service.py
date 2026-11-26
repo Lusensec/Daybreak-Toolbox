@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.13"
+APP_VERSION = "2.0.14"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,14 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.14":
+"""
+性能与多屏优化：
+1、混合 DPI 多屏修复：窗口移动/最大化/边缘拉伸改 per-monitor scale 精确坐标模型（主屏基准虚拟桌面），不同缩放比例的双屏之间拖窗口不再漂移（v2.0.10 已知限制的根治）；move/resize 一并改原子 SetWindowPos
+2、托盘启动全后台化：pystray/Pillow 导入与图标渲染不再占主线程，窗口启动提速 0.2–0.5s
+3、启动计时：各阶段耗时（bootstrap/uvicorn/窗口）打 [perf] 行进日志，为后续启动优化建立数据基线
+4、CI 增加测试门禁：全量 pytest + 前端构建先行，5 个平台构建 job 依赖其通过
+""",
     "v2.0.13":
 """
 全面清理：移除已退役的旧版功能痕迹
