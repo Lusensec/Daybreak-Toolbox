@@ -42,13 +42,31 @@ _BALL_D, _MARGIN = 44, 2          # 球直径 / 留白
 
 
 def _ensure_dpi_aware() -> None:
+    """尽量进入 Per-Monitor-DPI-aware-v2（物理像素，多屏混合缩放下窗口/光标/拖拽坐标一致）。
+    失败逐级回退；部分 Windows 构建 shcore 的 Context 系 API 无法按名解析，此时
+    SetProcessDPIAware()（system-aware）即可——坐标为本机系统 DPI 像素，单屏下与物理一致。"""
     try:
         import ctypes as _ct
 
         try:
-            _ct.windll.shcore.SetProcessDpiAwarenessContext(-4)  # PER_MONITOR_AWARE_V2
+            shcore = _ct.WinDLL("shcore.dll")
+            _ctx = shcore.SetProcessDpiAwarenessContext  # 解析不到会抛 AttributeError
+            _ctx.argtypes = [_ct.c_void_p]
+            _ctx.restype = _ct.c_void_p
+            # PER_MONITOR_AWARE_V2 = (HANDLE)-4
+            shcore.SetProcessDpiAwarenessContext(_ct.c_void_p(_ct.c_uint64(0xFFFFFFFFFFFFFFFC).value))
+            return
         except Exception:
-            _ct.windll.user32.SetProcessDPIAware()
+            pass
+        try:
+            _spda = _ct.WinDLL("shcore.dll").SetProcessDpiAwareness
+            _spda.argtypes = [_ct.c_int]
+            _spda.restype = _ct.c_int
+            if _spda(2) == 1:  # PROCESS_PER_MONITOR_DPI_AWARE
+                return
+        except Exception:
+            pass
+        _ct.windll.user32.SetProcessDPIAware()  # system-aware 兜底
     except Exception:
         pass
 
@@ -125,6 +143,16 @@ _user32.SetTimer.restype = ctypes.c_void_p
 _user32.KillTimer.argtypes = [_H, ctypes.c_uint]
 _user32.SetWindowLongPtrW.argtypes = [_H, ctypes.c_int, ctypes.c_void_p]
 _user32.SetWindowLongPtrW.restype = ctypes.c_void_p
+_user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+_user32.FindWindowW.restype = ctypes.c_void_p
+_user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+_user32.SetForegroundWindow.restype = ctypes.c_int
+_user32.EnumWindows.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+_user32.EnumWindows.restype = ctypes.c_int
+_user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+_user32.GetWindowTextW.restype = ctypes.c_int
+_user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+_user32.IsWindowVisible.restype = ctypes.c_int
 _gdi32.CreateEllipticRgn.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
 _gdi32.CreateEllipticRgn.restype = ctypes.c_void_p
 _gdi32.CreateRectRgn.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
@@ -177,7 +205,7 @@ _WM_MOUSEMOVE, _WM_LBUTTONDOWN, _WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
 _WM_RBUTTONUP, _WM_CONTEXTMENU = 0x0205, 0x007B
 _WM_APP = 0x8000
 _WM_TOPMOST, _WM_HIDDEN, _WM_CLOSED_REQUEST, _WM_RECREATE = (_WM_APP + 1, _WM_APP + 2, _WM_APP + 3, _WM_APP + 4)
-_SW_HIDE, _SW_SHOW = 0, 5
+_SW_HIDE, _SW_SHOW, _SW_MINIMIZE, _SW_RESTORE = 0, 5, 6, 9
 _HWND_TOPMOST, _HWND_NOTOPMOST = -1, -2
 _SWP_NOSIZE, _SWP_NOMOVE, _SWP_NOZORDER, _SWP_NOACTIVATE = 0x0001, 0x0002, 0x0004, 0x0010
 _WS_EX_LAYERED, _WS_EX_TOOLWINDOW = 0x00080000, 0x00000080
@@ -186,6 +214,7 @@ _TRANSPARENT_BK = 1
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong, ctypes.c_void_p, ctypes.c_ulong,
                              ctypes.c_void_p, ctypes.c_void_p)
+WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
 _user32.DefWindowProcW.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p]
 _user32.DefWindowProcW.restype = ctypes.c_longlong
 
@@ -247,23 +276,53 @@ def _make_dib(width: int, height: int) -> tuple[ctypes.Array, int]:
 _BALL_CACHE: dict = {}
 
 
-def _ball_image(root: Path, d: int):
-    """logo 圆球 RGBA（d×d，圆形 alpha）；无 logo 返回 None。带缓存（重建窗口高频调用）。"""
-    key = (str(Path(root)), d)
+def _system_light_theme() -> bool:
+    """Windows 系统浅色主题？（AppsUseLightTheme=1 → 浅色；键缺失回退 ColorsUseLightStyle；均缺 → 深色）。"""
+    try:
+        import winreg
+    except Exception:
+        return False
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+    for value in ("AppsUseLightTheme", "ColorsUseLightStyle"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as k:
+                v, _ = winreg.QueryValueEx(k, value)
+                return int(v) == 1
+        except OSError:
+            continue
+        except Exception:
+            return False
+    return False
+
+
+def _ball_logo_files(root: Path, light: bool) -> "list[Path]":
+    """球体图像候选链：简化球图标（球专用，深浅两版）→ 旧 logo 徽标 → 调用方渐变兜底。
+    frozen（打包 exe）：web 资产在 _MEIPASS/dist/（add-data web/dist;dist）。"""
+    name = "ball-light.png" if light else "ball-dark.png"
+    cands = [
+        Path(root) / "web" / "public" / name,
+        Path(root) / "web" / "dist" / name,
+        Path(root) / "web" / "public" / "logo.png",
+        Path(root) / "web" / "dist" / "logo.png",
+    ]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cands += [Path(meipass) / "dist" / name, Path(meipass) / "dist" / "logo.png"]
+    return cands
+
+
+def _ball_image(root: Path, d: int, light: bool = False):
+    """球体 RGBA（d×d，圆形 alpha）；无图像返回 None。带缓存（重建窗口高频调用；键含主题）。"""
+    key = (str(Path(root)), d, bool(light))
     if key in _BALL_CACHE:
         return _BALL_CACHE[key]
-    res = _ball_image_uncached(root, d)
+    res = _ball_image_uncached(root, d, light)
     _BALL_CACHE[key] = res
     return res
 
 
-def _ball_image_uncached(root: Path, d: int):
-    # 候选：开发态/项目根下的真 logo；frozen（打包 exe）时 web 资产在 _MEIPASS/dist/（add-data web/dist;dist）
-    cands = [Path(root) / rel for rel in ("web/public/logo.png", "web/dist/logo.png")]
-    _meipass = getattr(sys, "_MEIPASS", None)
-    if _meipass:
-        cands.append(Path(_meipass) / "dist" / "logo.png")
-    for p in cands:
+def _ball_image_uncached(root: Path, d: int, light: bool = False):
+    for p in _ball_logo_files(root, light):
         if not p.is_file():
             continue
         try:
@@ -552,6 +611,14 @@ class _NativeBall:
         dx, dy = x - cx, y - cy
         return dx * dx + dy * dy <= r * r
 
+    def _in_grab(self, x: int, y: int, wright: int, wht: int) -> bool:
+        """拖拽抓取区：球圆半径 ×1.2（点边缘也能抓）；菜单收起时整个窗口矩形内均可抓取。"""
+        cx, cy, r = self._ball_box()
+        dx, dy = x - cx, y - cy
+        if dx * dx + dy * dy <= (r * 1.2) ** 2:
+            return True
+        return (not self.menu_open) and 0 <= x < wright and 0 <= y < wht
+
     def _menu_item(self, x: int, y: int):
         st = self.st
         s = st["scale"]
@@ -698,7 +765,9 @@ class _NativeBall:
             wl, wt, ww, wh = _work_area()
             st["x"] = wl + max(0, ww - int(_CLOSED_H * s) - int(24 * s))
             st["y"] = wt + max(0, wh - int(_CLOSED_H * s) - int(80 * s))
-        self.ball = _ball_image(st["root"], int(_BALL_D * s))
+        # 球体图像随系统主题：浅色系统 → 米白球（ball-light），深色 → 藏青球（ball-dark）
+        self.ball_light = _system_light_theme()
+        self.ball = _ball_image(st["root"], int(_BALL_D * s), self.ball_light)
         self.font = _gdi32.CreateFontW(int(-12 * s), 0, 0, 0, 400, 0, 0, 0,
                                        0x0049, 0, 0, 49, "Microsoft YaHei")
 
@@ -813,6 +882,22 @@ class _NativeBall:
         self.menu_open = False
         self._menu_recreate()
 
+    def _toggle_menu_guarded(self, in_ball: bool, in_win: bool) -> None:
+        """右键切换菜单的**唯一** toggle 入口：轮询按边沿 / WM_CONTEXTMENU / WM_RBUTTONDOWN
+        三条路径都走这里；400ms 时间门保证同一物理右键至多 toggle 一次
+        （旧版多路径各自 toggle → 菜单闪一下/状态错乱）。"""
+        now = time.time()
+        if now - getattr(self, "_poll_toggle_t", 0.0) < 0.4:
+            return
+        self._poll_toggle_t = now
+        if in_ball:
+            if not self.menu_open:
+                self._open_menu()
+            else:
+                self._close_menu()
+        elif in_win and self.menu_open:
+            self._close_menu()  # 点窗口其他区域收起
+
     def _menu_recreate(self) -> None:
         """内容/位置变化 = 重建窗口（新窗口获得一次性表面提交）。"""
         import time as _t
@@ -820,6 +905,61 @@ class _NativeBall:
         if self.dragging:
             _user32.ReleaseCapture()
         _user32.DestroyWindow(self.hwnd)  # WM_DESTROY → PostQuitMessage → run() 重建
+
+    def _move_ball(self, nx: int, ny: int) -> None:
+        """拖拽跟随：SetWindowPos 移动 + 表面重提交（快路径，不重建窗口）。
+        本机 DWM 偶发「已提交表面移不动」（首提交后拒绝重提交）→ 自检失败回退重建路径。"""
+        st = self.st
+        s = st["scale"]
+        W = int(_MW * s)
+        H = int((_OPEN_H if self.menu_open else _CLOSED_H) * s)
+        _user32.SetWindowPos(self.hwnd, 0, nx, ny, W, H,
+                             _SWP_NOZORDER | _SWP_NOACTIVATE)
+        buf, hbit = _make_dib(W, H)
+        self._assemble_surface(buf, W, H)
+        hdc = _gdi32.CreateCompatibleDC(0)
+        old_sel = _gdi32.SelectObject(hdc, hbit)
+        self._draw_texts(hdc)
+        ok = self._ulw(hdc, nx, ny, W, H)
+        _gdi32.SelectObject(hdc, old_sel)
+        _gdi32.DeleteDC(hdc)
+        self._keep_hbit(hbit)
+        if ok and self._check_visible():
+            return
+        log.info("ball move re-ULW not visible (gen quirk); falling back to recreate")
+        self._menu_recreate()
+
+    def _find_main_window(self):
+        """主应用窗口（pywebview，标题「破晓·工具箱」且可见、非小球自身）。无 → None。"""
+        found = []
+
+        def _cb(hwnd, _lparam):
+            buf = ctypes.create_unicode_buffer(128)
+            if _user32.GetWindowTextW(hwnd, buf, 127) > 0 and buf.value == "破晓·工具箱" \
+                    and hwnd != self.hwnd and _user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+            return True
+
+        cb = WNDENUMPROC(_cb)  # 局部持有至 EnumWindows 返回（防 GC）
+        _user32.EnumWindows(cb, 0)
+        return found[0] if found else None
+
+    def _left_click_action(self) -> None:
+        """左键单击：窗口形态 → 聚焦/还原主窗口；服务形态（无主窗口）→ 默认浏览器。"""
+        st = self.st
+        hwnd = self._find_main_window()
+        if hwnd:
+            _user32.ShowWindow(hwnd, _SW_RESTORE)
+            if not _user32.SetForegroundWindow(hwnd):
+                # 前台锁限制：最小化→还原 破锁后再次置前
+                _user32.ShowWindow(hwnd, _SW_MINIMIZE)
+                _user32.ShowWindow(hwnd, _SW_RESTORE)
+                _user32.SetForegroundWindow(hwnd)
+            return
+        try:
+            webbrowser.open(f"http://127.0.0.1:{st.get('port', 8765)}/")
+        except Exception:
+            pass
 
     def _act(self, act) -> None:
         st = self.st
@@ -868,17 +1008,10 @@ class _NativeBall:
         in_ball = self._in_ball(cx, cy)
         import time as _t
         now = _t.time()
-        # 右键：边沿触发（需先观察到松开，400ms 去抖）
+        # 右键：轮询按边沿为单一 toggle 路径（guard 内 400ms 时间门；消息处理器不再自行 toggle）
         in_win = 0 <= cx < (wr.right - wr.left) and 0 <= cy < (wr.bottom - wr.top)
-        if rb and self._rb_seen_idle and now - getattr(self, "_poll_toggle_t", 0) > 0.4:
-            self._poll_toggle_t = now
-            if in_ball:
-                if not self.menu_open:
-                    self._open_menu()
-                else:
-                    self._close_menu()
-            elif in_win and self.menu_open:
-                self._close_menu()  # 点窗口其他区域收起
+        if rb and self._rb_seen_idle:
+            self._toggle_menu_guarded(in_ball, in_win)
             return
         self._rb_prev = rb
         # 左键拖拽（拖拽中跟随光标，无需保持在球内；需先观察到松开）
@@ -890,34 +1023,44 @@ class _NativeBall:
                 dx, dy = pos.x - self.drag_sx, pos.y - self.drag_sy
                 if abs(dx) + abs(dy) > 4:
                     self.moved = True
+                    # drag_ox/oy 全程保持「按下时的窗口原点」不变，dx/dy = 相对按压点的累计位移：
+                    # nx = 原点 + 累计位移。禁止把上一 tick 的 nx 回填当原点（旧版双重累加
+                    # → 球中途瞬移/飞角，周期落盘把坏位置写盘 → 重启弹回的根因）
                     nx, ny = self.drag_ox + dx, self.drag_oy + dy
                     wl, wt, ww, wh = _work_area_at(pos.x, pos.y)  # 光标所在显示器工作区（跨屏拖拽）
                     s2 = st["scale"]
-                    nx = min(max(wl, nx), wl + ww - int(_BALLDX * s2))
+                    # 窗口（含球）整体留在工作区内：x 用窗口宽 _MW，y 用窗高 _CLOSED_H
+                    nx = min(max(wl, nx), wl + ww - int(_MW * s2))
                     ny = min(max(wt, ny), wt + wh - int(_CLOSED_H * s2))
+                    lastp = getattr(self, "_drag_last", None)
                     last = getattr(self, "_last_recreate_t", 0.0)
-                    if (nx, ny) != (self.drag_ox, self.drag_oy) and now - last >= (0.0 if last == 0 else 0.05):
-                        self.drag_ox, self.drag_oy = nx, ny
+                    if (nx, ny) != lastp and now - last >= (0.0 if last == 0 else 0.03):
+                        self._drag_last = (nx, ny)
                         st["x"] = nx + int(_BALLDX * s2)
                         st["y"] = ny
                         self._last_recreate_t = now
-                        self._menu_recreate()  # 本机 DWM 无法移动已提交表面：重建到新位置
-            elif in_ball:
+                        # 快路径：SetWindowPos + 表面重提交（不重建窗口，拖拽平滑）；
+                        # 本机 DWM 若拒绝重提交（自检不可见）自动回退重建
+                        self._move_ball(nx, ny)
+                        # 拖拽中周期落盘（防松手边沿丢失导致重启弹回）
+                        if now - getattr(self, "_last_save_t", 0.0) >= 2.0:
+                            self._last_save_t = now
+                            _save_full(st)
+            elif self._in_grab(cx, cy, wr.right - wr.left, wr.bottom - wr.top):
                 self.dragging, self.moved = True, False
                 self.drag_sx, self.drag_sy = pos.x, pos.y
                 self.drag_ox, self.drag_oy = self._origin()
+                self._drag_last = None
         elif self.dragging:
             # 松开边沿（1→0）
             if self._lb_prev:
                 self.dragging = False
                 if not self.moved:
-                    # 单击（未移动）：打开工具箱
-                    try:
-                        webbrowser.open(f"http://127.0.0.1:{st.get('port', 8765)}/")
-                    except Exception:
-                        pass
+                    # 单击（未移动）：窗口形态聚焦主窗口；服务形态开浏览器
+                    self._left_click_action()
                 else:
                     _save_full(st)
+                    self._last_save_t = time.time()
             # 拖拽中 lb 粘滞：不强制结束，继续跟随（无害）
         elif self._lb_prev:
             # 非球区松开：点面板项执行动作 / 点空白收起菜单
@@ -944,6 +1087,18 @@ class _NativeBall:
         if msg == 0x0113:  # WM_TIMER
             if w == 0xB2:  # 输入轮询（本机鼠标消息投递不可靠）
                 self._poll_input()
+                # 主题轮询兜底：系统切深浅色时不一定向顶层窗口广播 WM_THEMECHANGED，
+                # 每 5s 重读注册表，有变化才重建换球体图标（平时零开销）
+                now_t = time.time()
+                if now_t - getattr(self, "_theme_check_t", 0.0) >= 5.0:
+                    self._theme_check_t = now_t
+                    cur_light = _system_light_theme()
+                    if cur_light != self.ball_light:
+                        log.info("ball theme changed (%s -> %s); recreating",
+                                 "light" if self.ball_light else "dark",
+                                 "light" if cur_light else "dark")
+                        self.ball_light = cur_light
+                        self._menu_recreate()
             elif w == 0xB3:  # 表面可见性自检（布局感知）
                 _user32.KillTimer(hwnd, 0xB3)
                 if not self._check_visible():
@@ -966,20 +1121,21 @@ class _NativeBall:
             wr = wintypes.RECT()
             _user32.GetWindowRect(hwnd, ctypes.byref(wr))
             cx2, cy2 = sx - wr.left, sy - wr.top
-            if self._in_ball(cx2, cy2):
-                self._open_menu() if not self.menu_open else self._close_menu()
-            elif self.menu_open:
-                self._close_menu()
+            in_ball = self._in_ball(cx2, cy2)
+            in_win = 0 <= cx2 < (wr.right - wr.left) and 0 <= cy2 < (wr.bottom - wr.top)
+            self._toggle_menu_guarded(in_ball, in_win)  # 统一 guard：与轮询/按下共享 400ms 门
             return 0
-        if msg in (0x0204, 0x0205):  # WM_RBUTTONDOWN / WM_RBUTTONUP
+        if msg == 0x0204:  # WM_RBUTTONDOWN（RBUTTONUP 不再 toggle：一次物理右键至多一次切换）
             x, y = (l or 0) & 0xFFFF, ((l or 0) >> 16) & 0xFFFF
-            if self._in_ball(x, y):
-                if not self.menu_open:
-                    self._open_menu()
-                else:
-                    self._close_menu()
-            elif self.menu_open:
-                self._close_menu()
+            s2 = st["scale"]
+            ww2 = int(_MW * s2)
+            wh2 = int((_OPEN_H if self.menu_open else _CLOSED_H) * s2)
+            in_ball = self._in_ball(x, y)
+            in_win = 0 <= x < ww2 and 0 <= y < wh2
+            self._toggle_menu_guarded(in_ball, in_win)
+            return 0
+        if msg == 0x031A:  # WM_THEMECHANGED：系统深浅色切换 → 重建以换球体图标（重读注册表）
+            self._menu_recreate()
             return 0
         if msg == _WM_TOPMOST:
             st["topmost"] = bool(w)
@@ -1077,15 +1233,14 @@ def _ball_thread_main() -> None:
         st["hidden"] = bool(p.get("hidden", False))
     except Exception:
         st["topmost"], st["hidden"] = True, False
-    # 位置越界钳制：旧配置 / 换屏 / DPI 变化后，落点不在主屏工作区内则拉回右下角默认位
-    # （与 _new_window 的默认落点一致），避免球画到屏外「看不见」
+    # 位置越界钳制：旧配置 / 换屏 / DPI 变化后，落点不在主屏工作区内则**钳制进工作区**
+    # （保留用户位置，不再重置默认位——旧版直接弹回默认是「重启位置丢失」的观感来源）
     if st["x"] is not None and st["y"] is not None:
         s = st["scale"]
         wl, wt, ww, wh = _work_area()
-        b = int(_CLOSED_H * s)
-        if st["x"] < wl or st["y"] < wt or st["x"] > wl + ww - b or st["y"] > wt + wh - b:
-            st["x"] = wl + max(0, ww - b - int(24 * s))
-            st["y"] = wt + max(0, wh - b - int(80 * s))
+        bx = int(_BALL_D * s)  # 球直径（st.x/y = 球左上角物理像素）
+        st["x"] = min(max(st["x"], wl), wl + max(0, ww - bx))
+        st["y"] = min(max(st["y"], wt), wt + max(0, wh - bx))
     _NativeBall(st).run()
 
 

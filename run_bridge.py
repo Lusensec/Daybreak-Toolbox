@@ -36,6 +36,14 @@ def _bootstrap_frozen_state() -> None:
     # 日志：exe 旁 daybreak.log（追加）；console 版保留原句柄，双写
     log_path = os.path.join(exe_dir, "daybreak.log")
     log_f = open(log_path, "a", encoding="utf-8", buffering=1)
+    # logging（ball/bridge 各模块 log）也落同一文件，便于窗口形态诊断（如球体移动/重建）
+    import logging
+    _root = logging.getLogger()
+    if not any(getattr(h, "stream", None) is log_f for h in _root.handlers):
+        _h = logging.StreamHandler(log_f)
+        _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        _root.addHandler(_h)
+        _root.setLevel(logging.INFO)
     for name in ("stdout", "stderr"):
         cur = getattr(sys, name, None)
         if getattr(sys, "frozen", False):
