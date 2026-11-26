@@ -62,28 +62,51 @@ export function NoteEditor() {
     return () => clearTimeout(t);
   }, [content]);
 
-  // 行号渲染（行高随字体同步；active 行与 cursorLine 对齐）
+  // 行号 gutter 增量更新（v2.0.12 轻量优化：旧版每次击键全量重建 N 个 div，长笔记 O(N)/键 卡顿）
   const lines = content.split("\n").length;
+  const cursorRef = useRef(cursorLine);
+  cursorRef.current = cursorLine;
+
+  // ① 全量重建：仅当 行数/主题/字号 变化（O(N) 但很少发生）；重建后补打当前活动行高亮
   useEffect(() => {
     const g = gutterRef.current;
-    const ta = taRef.current;
-    if (!g || !ta) return;
-    g.scrollTop = ta.scrollTop;
-    g.innerHTML = "";
+    if (!g) return;
     const p = activePalette();
+    g.innerHTML = "";
     const frag = document.createDocumentFragment();
     for (let i = 1; i <= lines; i++) {
       const div = document.createElement("div");
-      div.className = "note-line" + (i === cursorLine ? " active" : "");
+      div.className = "note-line";
       div.textContent = String(i);
       div.style.color = p.noteGutterFg;
       div.style.height = `${lh}px`;
       div.style.lineHeight = `${lh}px`;
-      if (i === cursorLine) div.style.background = p.noteLineHl;
       frag.appendChild(div);
     }
     g.appendChild(frag);
-  }, [content, lines, isDark, lh, cursorLine]);
+    const active = g.children[cursorRef.current - 1] as HTMLElement | undefined;
+    if (active) {
+      active.classList.add("active");
+      active.style.background = p.noteLineHl;
+    }
+  }, [lines, isDark, lh]);
+
+  // ② 活动行高亮：cursorLine 变化只交换 2 个节点（O(1)；主题/字号变化时随 ① 重建重着色）
+  useEffect(() => {
+    const g = gutterRef.current;
+    if (!g) return;
+    const p = activePalette();
+    const prev = g.querySelector<HTMLDivElement>(".note-line.active");
+    if (prev) {
+      prev.classList.remove("active");
+      prev.style.background = "";
+    }
+    const el = g.children[cursorLine - 1] as HTMLElement | undefined;
+    if (el && el.classList.contains("note-line")) {
+      el.classList.add("active");
+      el.style.background = p.noteLineHl;
+    }
+  }, [cursorLine, isDark, lh]);
 
   function saveNow() {
     try { localStorage.setItem(LS_KEY, content); } catch { /* ignore */ }

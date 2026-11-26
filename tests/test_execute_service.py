@@ -18,6 +18,89 @@ from bridge import execute_service
 from bridge import menu_service
 
 
+def test_download_streams_chunks_not_full_read(root, monkeypatch):
+    """v2.0.12：下载链接改 1MB 分块流式写盘（旧版 resp.read() 全量入内存）；
+    分块序列断言 + 回写 config + 文件字节完整。"""
+    import io
+
+    cfg_dir = root / "config"
+    cfg = json.loads((cfg_dir / "config.json").read_text(encoding="utf-8"))
+    cfg["红队"]["navigation_bar_name"]["扫描"].append(
+        {"工具名称": "dl", "工具路径": "http://x.com/dl.zip",
+         "启动方式": "下载链接", "工具命令": ""})
+    (cfg_dir / "config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+
+    payload = b"a" * (3 * 1024 * 1024 + 7)  # 3MB+7：验证跨块切分
+    chunks_seen: list[int] = []
+
+    class _FakeResp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=-1):
+            chunks_seen.append(n)
+            return super().read(n)
+
+    monkeypatch.setattr(execute_service.urllib.request, "urlopen",
+                       lambda *a, **k: _FakeResp(payload))
+    r = execute_service.run_tool("红队", "dl")
+    assert r["ok"] is True
+    # 文件完整
+    f = root / "红队" / "扫描" / "dl" / "dl.zip"
+    assert f.read_bytes() == payload
+    # 分块读：全部 1MB 块（非一次性全量 -1）
+    assert chunks_seen and all(n == 1024 * 1024 for n in chunks_seen), chunks_seen[:4]
+    # 回写 config：工具路径 → dl/dl.zip（相对 菜单/导航 目录）
+    cfg2 = json.loads((cfg_dir / "config.json").read_text(encoding="utf-8"))
+    dl_tool = next(t for t in cfg2["红队"]["navigation_bar_name"]["扫描"]
+                   if t["工具名称"] == "dl")
+    assert dl_tool["工具路径"] == "dl/dl.zip"
+
+
+def test_download_failure_removes_partial_file(root, monkeypatch):
+    """v2.0.12：下载失败清理残留部分文件（避免下次误判已下载）。"""
+    import io
+
+    cfg_dir = root / "config"
+    cfg = json.loads((cfg_dir / "config.json").read_text(encoding="utf-8"))
+    cfg["红队"]["navigation_bar_name"]["扫描"].append(
+        {"工具名称": "dl2", "工具路径": "http://x.com/dl2.zip",
+         "启动方式": "下载链接", "工具命令": ""})
+    (cfg_dir / "config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+
+    class _Boom(io.BytesIO):
+        def __init__(self):
+            super().__init__(b"partial")
+            self._n = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=-1):
+            self._n += 1
+            if self._n == 1:
+                return super().read(n)
+            raise ConnectionError("boom")
+
+    monkeypatch.setattr(execute_service.urllib.request, "urlopen", _Boom)
+    with pytest.raises(execute_service.ToolError) as exc:
+        execute_service.run_tool("红队", "dl2")
+    assert exc.value.code == "TOOL_DOWNLOAD_FAIL"
+    # 残留部分文件已清理
+    assert not (root / "红队" / "扫描" / "dl2" / "dl2.zip").exists()
+    # config 未回写（仍是 URL）
+    cfg2 = json.loads((cfg_dir / "config.json").read_text(encoding="utf-8"))
+    dl_tool = next(t for t in cfg2["红队"]["navigation_bar_name"]["扫描"]
+                   if t["工具名称"] == "dl2")
+    assert dl_tool["工具路径"] == "http://x.com/dl2.zip"
+
+
 @pytest.fixture
 def root(tmp_path):
     menu_service.set_root(tmp_path)   # execute_service 复用同一 project_root()

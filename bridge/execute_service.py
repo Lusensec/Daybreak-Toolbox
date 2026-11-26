@@ -96,10 +96,22 @@ def run_tool(menu: str, name: str) -> dict:
         fname = os.path.basename(urlparse(url).path) or "download"
         local_file = local_dir / fname
         try:
-            with urllib.request.urlopen(url, timeout=120) as resp:
-                data = resp.read()
-            local_file.write_bytes(data)
+            with urllib.request.urlopen(url, timeout=120) as resp, \
+                    open(local_file, "wb") as out:
+                # 1MB 分块流式写盘（v2.0.12：旧版 resp.read() 全量入内存，
+                # 几百 MB 的工具会顶起等量内存峰值）
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
         except Exception as e:
+            # 失败清理残留部分文件（避免下次误判已下载）
+            try:
+                if local_file.exists():
+                    local_file.unlink()
+            except OSError:
+                pass
             raise ToolError("TOOL_DOWNLOAD_FAIL", f"下载失败：{e}")
         # 回写 config：工具路径 → <工具名称>/<basename>（相对 菜单/导航 目录）
         update_tool_path(menu, name, f"{name}/{fname}")

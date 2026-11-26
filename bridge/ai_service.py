@@ -20,6 +20,7 @@ from . import ai_config as _ai_config  # 相对导入（bridge 包内；worker �
 
 # 历史轮数上限的兜底默认；实际值每次请求从 ai_config.history_rounds() 动态读取（改配置即时生效）
 _HISTORY_LIMIT = 20  # 轮（每轮 user+assistant 两条），仅作 history_rounds() 读失败时的兜底
+_MAX_SESSIONS = 50   # 会话键上限（v2.0.12：托盘常驻数天，按插入序淘汰最旧会话防无界增长）
 
 
 class AiService:
@@ -27,6 +28,14 @@ class AiService:
         self._broadcast = broadcast
         self._hist: Dict[str, List[dict]] = {}
         self._lock = threading.Lock()
+
+    def _prune_sessions_locked(self) -> None:
+        """超出会话上限时淘汰最旧键（dict 保插入序；需持 self._lock 调用）。"""
+        excess = len(self._hist) - _MAX_SESSIONS
+        if excess <= 0:
+            return
+        for k in list(self._hist.keys())[:excess]:
+            self._hist.pop(k, None)
 
     def _history(self, session: str) -> List[dict]:
         with self._lock:
@@ -42,6 +51,8 @@ class AiService:
 
     def _append(self, session: str, user: str, assistant: str) -> None:
         with self._lock:
+            if session in self._hist:
+                del self._hist[session]  # 刷新 LRU 位置（复用最旧会话 → 变最新，不被淘汰）
             h = self._hist.setdefault(session, [])
             h.append({"role": "user", "content": user})
             h.append({"role": "assistant", "content": assistant})
@@ -52,6 +63,7 @@ class AiService:
                 limit = _HISTORY_LIMIT
             if len(h) > limit * 2:
                 del h[: len(h) - limit * 2]
+            self._prune_sessions_locked()
 
     def clear(self, session: str) -> None:
         """会话清空（对应旧版「清空」按钮 / 重开会话）。"""

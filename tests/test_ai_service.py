@@ -58,6 +58,30 @@ class TestAiService(unittest.TestCase):
         self.assertEqual(payload["text"], "")
         self.assertEqual(payload["session"], "s1")
 
+    def test_session_keys_bounded(self):
+        """v2.0.12：会话键上限 50（插入序淘汰最旧）——托盘常驻数天内存有界。"""
+        svc = ai_service.AiService(lambda *a: None)
+        for i in range(60):
+            svc._append(f"sess-{i}", "u", "a")
+        self.assertEqual(len(svc._hist), 50)
+        # 最旧 10 个（sess-0..9）被淘汰，保留 sess-10..59
+        self.assertNotIn("sess-0", svc._hist)
+        self.assertNotIn("sess-9", svc._hist)
+        self.assertIn("sess-10", svc._hist)
+        self.assertIn("sess-59", svc._hist)
+
+    def test_session_prune_keeps_recent_on_reuse(self):
+        """复用旧会话键后其位置更新（插入序语义），不被误淘汰。"""
+        svc = ai_service.AiService(lambda *a: None)
+        for i in range(51):
+            svc._hist.setdefault(f"s{i}", [])
+        self.assertEqual(len(svc._hist), 51)
+        # 再给最旧的 s0 追加一轮 → 它成为最新，淘汰的应是 s1
+        svc._append("s0", "u", "a")
+        self.assertEqual(len(svc._hist), 50)
+        self.assertIn("s0", svc._hist)
+        self.assertNotIn("s1", svc._hist)
+
     def test_normal_appends_history(self):
         restore = _set_chat_once(lambda msg, model, **kw:
                                  {"ok": True, "text": "你好，我是Kimi", "kind": "openai", "label": "Kimi"})

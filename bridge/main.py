@@ -598,7 +598,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.11", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.12", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -1004,6 +1004,13 @@ def run_windowed(port: Optional[int] = None) -> None:
             break
         srv.join(0.1)
     url = f"http://127.0.0.1:{port}/"
+    if not server.started:
+        # v2.0.12：10s 内桥接未就绪（端口竞态/异常）→ 不继续开空白窗口，降级浏览器模式
+        print(f"[bridge] 警告：桥接服务 10s 内未就绪（should_exit={server.should_exit}），"
+              f"降级服务模式（浏览器打开）")
+        _fallback_browser(port, url)
+        _threading.Event().wait()  # 保持进程存活（uvicorn 可能稍后恢复；托盘仍可用）
+        return
     print(f"[bridge] listening on 127.0.0.1:{port} (windowed)")
     print(f"[bridge] token: {_token_mod.get_token()}")
 
@@ -1018,17 +1025,23 @@ def run_windowed(port: Optional[int] = None) -> None:
         webview.start()  # 阻塞：主线程窗口消息循环；窗口关闭后返回
     except Exception as e:
         print(f"[bridge] 窗口模式不可用（{type(e).__name__}: {e}）；降级服务模式，用默认浏览器打开界面")
-        try:
-            import webbrowser
-            _threading.Timer(0.5, lambda: webbrowser.open(url)).start()
-        except Exception:
-            pass
+        _fallback_browser(port, url)
         _threading.Event().wait()  # 服务模式：保持进程存活（uvicorn/托盘为 daemon 线程）
         return
 
     # 窗口关闭 → 退出全进程（与托盘「退出」同语义）
     print("[bridge] 窗口已关闭，退出进程（想服务常驻请用 --service 参数启动）")
     os._exit(0)
+
+
+def _fallback_browser(port: int, url: str) -> None:
+    """窗口/桥接不可用时的兜底：0.5s 后开默认浏览器。"""
+    import webbrowser
+    import threading as _threading
+    try:
+        _threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    except Exception:
+        pass
 
 
 def main() -> None:
@@ -1062,7 +1075,12 @@ def main() -> None:
         if server.started:
             break
         srv.join(0.1)
-    print(f"[bridge] listening on 127.0.0.1:{port}")
+    if not server.started:
+        # v2.0.12：桥接未就绪警告（托盘/进程仍存活，uvicorn 稍后可能恢复；不静默）
+        print(f"[bridge] 警告：桥接服务 10s 内未就绪（should_exit={server.should_exit}）；"
+              f"进程/托盘保持，界面暂不可用")
+    else:
+        print(f"[bridge] listening on 127.0.0.1:{port}")
     print(f"[bridge] token: {_token_mod.get_token()}")
     print(f"[bridge] 界面地址 http://127.0.0.1:{port}/ （托盘「打开首页」/ 浏览器手动访问亦可）")
 
