@@ -104,3 +104,54 @@ def test_detach_cancels_worker():
         assert ws not in bus._queues
 
     asyncio.run(scenario())
+
+
+def test_queue_full_rejects_new_commands():
+    """v2.0.11 防洪泛：单连接待处理命令超上限（512）即拒收（WS_QUEUE_FULL），内存有界。"""
+    from bridge.ws import MAX_PENDING_PER_CLIENT
+
+    async def scenario() -> None:
+        bus = WsBus()
+
+        async def slow(p, _ws):
+            await asyncio.sleep(2)  # 一直慢，让队列堆积
+            return {}
+
+        bus.register("slow", slow)
+        ws = FakeWs()
+        # 灌满队列（直接 dispatch 绕开 handle_inbound 的帧校验）
+        for i in range(MAX_PENDING_PER_CLIENT + 10):
+            bus.dispatch(ws, str(i), slow, {})
+        await asyncio.sleep(0.05)
+        q = bus._queues.get(ws)
+        assert q is not None and q.qsize() <= MAX_PENDING_PER_CLIENT
+        # 超限命令收到 err 回包（而非入队）
+        errs = [m for m in ws.sent if m.get("type") == "err" and m["payload"].get("code") == "WS_QUEUE_FULL"]
+        assert len(errs) >= 10, f"应拒收超限命令并回 WS_QUEUE_FULL，实际 {len(errs)}"
+
+    asyncio.run(scenario())
+
+
+def test_frame_too_large_rejected():
+    """v2.0.11 帧上限：普通小帧走快路径（不分配 encode）；超大帧精确判定拒收。"""
+    from bridge.ws import MAX_FRAME_BYTES
+
+    async def scenario() -> None:
+        bus = WsBus()
+
+        async def echo(p, _ws):
+            return {"ok": True}
+
+        bus.register("echo", echo)
+        ws = FakeWs()
+        # 小帧正常入队（快路径：4×len ≤ 上限，免 encode）
+        await bus.handle_inbound(ws, json.dumps({"id": "1", "type": "echo", "payload": {"x": 1}}))
+        await asyncio.sleep(0.05)
+        assert any(m.get("type") == "ack" for m in ws.sent)
+        # 超大帧：字符数 ×4 超上限 → 精确 encode 判定 → 拒收
+        big = json.dumps({"id": "2", "type": "echo", "payload": {"blob": "a" * (MAX_FRAME_BYTES + 1)}})
+        await bus.handle_inbound(ws, big)
+        errs = [m for m in ws.sent if m.get("type") == "err" and m["payload"].get("code") == "WS_FRAME_TOO_LARGE"]
+        assert len(errs) == 1, "超大帧应被拒收"
+
+    asyncio.run(scenario())

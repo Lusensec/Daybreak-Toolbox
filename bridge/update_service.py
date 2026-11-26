@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.10"
+APP_VERSION = "2.0.11"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,13 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.11":
+"""
+轻量优化（内存/CPU/磁盘卫生，行为不变）：
+1、daybreak.log 改滚动日志（单文件 ≤5MB、留 2 份备份，磁盘占用封顶 ~15MB）——托盘常驻跑数天不再无限增长；stdout/stderr 统一经 logging 落轮转文件
+2、WS 总线每连接待处理命令设上限（512，超出拒收回 WS_QUEUE_FULL）——异常客户端/慢命令堆积时内存有界
+3、WS 帧上限校验快路径（普通小帧免 utf-8 编码分配，降 CPU 微开销）
+""",
     "v2.0.10":
 """
 1、最大化/还原改为几何驱动（幂等自愈）：不再依赖状态标志——页面重载、任务栏最小化往返、最大化中手动改大小后，按钮依旧可靠（v2.0.9 起第二次点击失效的根因）

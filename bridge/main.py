@@ -598,7 +598,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.10", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.11", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -811,16 +811,6 @@ def _win_work_areas() -> "list[tuple[tuple[int, int, int, int], tuple[int, int, 
     _cb_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong)
     user32.EnumDisplayMonitors(None, None, _cb_type(cb), None)
     return mons
-
-
-def _showwindow_normal(w) -> None:
-    """ShowWindow(SW_SHOWNORMAL=1)：清残留 showCmd（历史异常路径若曾把窗口置 Maximized/Minimized，
-    手动 move/resize 后把状态机拉回 Normal，保证后续 SetWindowPos 始终被 Windows 受理）。"""
-    try:
-        import ctypes
-        ctypes.windll.user32.ShowWindow(_handle_int(w), 1)
-    except Exception:
-        pass
 
 
 import threading as _threading

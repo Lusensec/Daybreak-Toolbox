@@ -17,9 +17,35 @@ import shutil
 import sys
 
 
+def _LogStream(io, logger):
+    """stdout/stderr → 滚动日志文件（经 logging 通道，与 RotatingFileHandler 同一份轮转策略；
+    无 console 版唯一的诊断通道由此落盘。按行切分，空行不记。"""
+    import logging as _logging
+
+    class _S(io.TextIOBase):
+        def __init__(self, log):
+            super().__init__()
+            self._log = log
+            self._buf = ""
+
+        def write(self, s):
+            self._buf += s
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                if line.strip():
+                    self._log.info("%s", line)
+            return len(s)
+
+        def flush(self):
+            pass
+
+    return _S(logger)
+
+
 def _bootstrap_frozen_state() -> None:
     """frozen 态：把 _MEIPASS 内置 config 缺项复制到 exe 同目录（可写状态区），
-    并把 stdout/stderr 落盘到 exe 旁 daybreak.log（无 console 版唯一的诊断通道）。"""
+    并把 stdout/stderr 经 logging 落盘到 exe 旁 daybreak.log（**滚动 5MB×2 备份**——
+    托盘常驻应用跑数天不再无限增长；旧版裸 append 句柄轮转后仍写旧文件，故统一走 logging）。"""
     meipass = getattr(sys, "_MEIPASS", None)
     if not meipass:
         return
@@ -33,48 +59,50 @@ def _bootstrap_frozen_state() -> None:
             dst_f = os.path.join(dst, name)
             if os.path.isfile(src_f) and not os.path.exists(dst_f):
                 shutil.copyfile(src_f, dst_f)
-    # 日志：exe 旁 daybreak.log（追加）；console 版保留原句柄，双写
-    log_path = os.path.join(exe_dir, "daybreak.log")
-    log_f = open(log_path, "a", encoding="utf-8", buffering=1)
-    # logging（bridge 各模块 log）也落同一文件，便于窗口形态诊断
+    # 日志：exe 旁 daybreak.log（滚动：单文件 ≤5MB，保留 2 份备份 → 磁盘占用封顶 ~15MB）
     import logging
+    from logging.handlers import RotatingFileHandler
+    log_path = os.path.join(exe_dir, "daybreak.log")
     _root = logging.getLogger()
-    if not any(getattr(h, "stream", None) is log_f for h in _root.handlers):
-        _h = logging.StreamHandler(log_f)
-        _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-        _root.addHandler(_h)
+    if not any(isinstance(h, RotatingFileHandler) and getattr(h, "baseFilename", "") == log_path
+               for h in _root.handlers):
+        _rfh = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=2,
+                                   encoding="utf-8")
+        _rfh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        _root.addHandler(_rfh)
         _root.setLevel(logging.INFO)
+    _console_log = logging.getLogger("daybreak.console")  # print/traceback 走同一滚动文件
+    import io
     for name in ("stdout", "stderr"):
         cur = getattr(sys, name, None)
-        if getattr(sys, "frozen", False):
-            if cur is None:
-                setattr(sys, name, log_f)
-            else:  # console 版：双写
-                import io
+        if cur is None:
+            # 无 console（--noconsole）：直接接滚动日志
+            setattr(sys, name, _LogStream(io, _console_log))
+        else:
+            # console 版：双写（真 console + 滚动日志）
+            class _Dup(io.TextIOBase):
+                def __init__(self, a, b):
+                    self._a, self._b = a, b
 
-                class _Dup(io.TextIOBase):
-                    def __init__(self, a, b):
-                        self._a, self._b = a, b
+                def write(self, s):
+                    try:
+                        self._a.write(s)
+                    except Exception:
+                        pass
+                    try:
+                        self._b.write(s)
+                    except Exception:
+                        pass
 
-                    def write(self, s):
+                def flush(self):
+                    for x in (self._a, self._b):
                         try:
-                            self._a.write(s)
+                            x.flush()
                         except Exception:
                             pass
-                        try:
-                            self._b.write(s)
-                        except Exception:
-                            pass
 
-                    def flush(self):
-                        for x in (self._a, self._b):
-                            try:
-                                x.flush()
-                            except Exception:
-                                pass
-
-                setattr(sys, name, _Dup(cur, log_f))
-    print(f"[daybreak] frozen root={exe_dir} log={log_path}")
+            setattr(sys, name, _Dup(cur, _LogStream(io, _console_log)))
+    print(f"[daybreak] frozen root={exe_dir} log={log_path} (rotating 5MB x2)")
 
 
 def main() -> None:

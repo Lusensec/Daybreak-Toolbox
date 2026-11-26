@@ -16,10 +16,12 @@ from typing import Any, Dict, Optional
 from fastapi import WebSocket
 
 MAX_FRAME_BYTES = 512 * 1024  # 512KB 帧上限
+MAX_PENDING_PER_CLIENT = 512   # 每连接待处理命令上限（防洪泛/故障客户端无限堆积内存）
 
 # 错误码
 E_TOKEN_INVALID = "TOKEN_INVALID"
 E_FRAME_TOO_LARGE = "WS_FRAME_TOO_LARGE"
+E_QUEUE_FULL = "WS_QUEUE_FULL"
 E_INTERNAL = "INTERNAL"
 E_NOT_FOUND = "NOT_FOUND"
 
@@ -65,7 +67,9 @@ class WsBus:
 
     # ---- 入站消息处理 ----
     async def handle_inbound(self, ws: WebSocket, raw: str) -> None:
-        if len(raw.encode("utf-8")) > MAX_FRAME_BYTES:
+        # 帧上限快路径：utf-8 字节数 ≤ 4×字符数，4×len 不超限则必然合规（免 encode 分配，
+        # 普通小帧零成本）；仅超大帧才做精确 encode 判定
+        if len(raw) * 4 > MAX_FRAME_BYTES and len(raw.encode("utf-8")) > MAX_FRAME_BYTES:
             await self._reply(ws, str(uuid.uuid4()), "err", {"code": E_FRAME_TOO_LARGE})
             return
         try:
@@ -85,12 +89,18 @@ class WsBus:
         # 入队派发：handler 执行与接收循环解耦（同连接按到达顺序串行，语义与旧内联版一致）
         self.dispatch(ws, req_id, handler, payload)
 
-    # ---- 每连接 FIFO 派发（慢 handler 不阻塞读帧） ----
+    # ---- 每连接 FIFO 派发（慢 handler 不阻塞读帧；队列设上限防内存无界） ----
     def dispatch(self, ws: WebSocket, req_id: Optional[str], handler, payload: dict) -> None:
         q = self._queues.get(ws)
         if q is None:
             q = asyncio.Queue()
             self._queues[ws] = q
+        if q.qsize() >= MAX_PENDING_PER_CLIENT:
+            # 防洪泛：达上限拒收新命令（err 回包；在途命令照常排空）
+            asyncio.create_task(self._reply(ws, req_id, "err",
+                                            {"code": E_QUEUE_FULL,
+                                             "message": f"too many pending commands (> {MAX_PENDING_PER_CLIENT})"}))
+            return
         q.put_nowait((req_id, handler, payload))
         w = self._workers.get(ws)
         if w is None or w.done():
