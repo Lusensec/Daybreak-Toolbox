@@ -40,6 +40,13 @@ jobs:
             pyinstaller: --onefile
             add-data-sep: ":"
             icon: ""
+          # Windows 安装程序（Inno Setup，windows-latest runner 预装 iscc）：复用 Windows 构建链 + 打包 setup.exe
+          - os: windows-latest
+            artifact-suffix: win-setup
+            pyinstaller: --onefile --noconsole
+            add-data-sep: ";"
+            icon: packaging/daybreak_logo.ico
+            build-setup: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -96,6 +103,7 @@ jobs:
           echo "build done: $(ls dist | head -5 | tr '\n' ' ')"
 
       - name: Package zip (跨平台统一用 python shutil)
+        if: ${{ !matrix.build-setup }}
         shell: bash
         run: |
           case "${{ github.ref_name }}" in
@@ -107,6 +115,20 @@ jobs:
           python -c "import shutil; shutil.make_archive('${out}', 'zip', 'dist')"
           ls -la "${out}.zip"
 
+      - name: Build Inno Setup installer (Windows 安装程序)
+        if: ${{ matrix.build-setup }}
+        shell: bash
+        run: |
+          case "${{ github.ref_name }}" in
+            v*) ver="${{ github.ref_name }}" ;;
+            *)  ver="manual" ;;
+          esac
+          num="${ver#v}"   # Inno VersionNumber 要求纯点分数字
+          iscc /D:AppVersion="$ver" /D:AppVerNum="$num" /D:ExePath="dist\DaybreakToolbox.exe" packaging/windows/setup.iss
+          # 产物在 packaging/windows/out/ → 挪到工作区根，供上传步骤引用
+          mv "packaging/windows/out/Daybreak-Toolbox-${ver}-win-setup.exe" .
+          ls -la "Daybreak-Toolbox-${ver}-win-setup.exe"
+
       - name: Upload to GitHub Release (tag builds)
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -115,18 +137,24 @@ jobs:
             v*) ver="${{ github.ref_name }}" ;;
             *)  ver="manual" ;;
           esac
-          # 幂等建 Release（4 平台并行：先完成者创建，其余跳过）
+          # 幂等建 Release（5 平台并行：先完成者创建，其余跳过）
           if ! gh release view "$ver" >/dev/null 2>&1; then
             gh release create "$ver" \
               --title "Daybreak Toolbox $ver" \
               --notes "破晓·工具箱 $ver 多平台安装包（Windows / macOS / Linux，包内含 README）。
-              Windows：解压运行 DaybreakToolbox.exe（托盘常驻）；
+              Windows：推荐 win-setup.exe 安装程序（选安装路径）；或解压 zip 运行 DaybreakToolbox.exe（托盘常驻）；
               macOS：双击 DaybreakToolbox.app（首次 右键→打开 绕过 Gatekeeper）；
               Linux：解压运行 ./DaybreakToolbox（需系统含 libgtk；托盘仅 Windows 生效）。" \
               --target "${{ github.sha }}" || echo "release create raced/skipped"
           fi
+          # 资产：win-setup 条目上传 Inno 安装程序（.exe），其余条目上传 zip
+          if [ "${{ matrix.build-setup }}" = "true" ]; then
+            asset="Daybreak-Toolbox-${ver}-win-setup.exe"
+          else
+            asset="Daybreak-Toolbox-${ver}-${{ matrix.artifact-suffix }}.zip"
+          fi
           for i in 1 2 3 4 5; do
-            gh release upload "$ver" "Daybreak-Toolbox-${ver}-${{ matrix.artifact-suffix }}.zip" --clobber && break
+            gh release upload "$ver" "$asset" --clobber && break
             sleep $((i * 5))
           done
         env:
@@ -137,5 +165,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: daybreak-${{ matrix.artifact-suffix }}
-          path: "Daybreak-Toolbox-*.zip"
+          path: ${{ matrix.build-setup && 'Daybreak-Toolbox-*-win-setup.exe' || 'Daybreak-Toolbox-*.zip' }}
           if-no-files-found: error

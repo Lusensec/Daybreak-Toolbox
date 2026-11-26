@@ -1,8 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation } from "react-router";
-import { Moon, Sun, Wifi, WifiOff, Settings, Monitor, Maximize2, Minimize2, X } from "lucide-react";
+import { Wifi, WifiOff, Settings, Maximize2, Minimize2, Minimize, X } from "lucide-react";
 import { useTheme } from "../theme/ThemeProvider";
-import type { ThemeChoice } from "../theme/ThemeProvider";
 import { connectBridge, disconnectBridge, useConnStore, sendCommand, fetchBridgeToken } from "../services/ws";
 import { DynamicMenuNav, NavBarRow, CtxMenu } from "./DynamicMenuNav";
 import type { CtxState } from "./DynamicMenuNav";
@@ -34,10 +33,6 @@ const SettingsModalLazy = lazy(() => import("./SettingsModal").then((m) => ({ de
 // bridge 自托管生产模式：同源部署（pnpm build 后由 python -m bridge.main 托管）。
 // 此模式下自动取 /api/token 并连接，隐藏 dev 桥接 dock。
 const BRIDGE_HOSTED = !import.meta.env.DEV;
-
-// 单按钮主题循环：浅色 → 深色 → 跟随系统 → 浅色（图标展示当前项）
-const THEME_NEXT: Record<ThemeChoice, ThemeChoice> = { light: "dark", dark: "system", system: "light" };
-const THEME_LABEL: Record<ThemeChoice, string> = { light: "浅色", dark: "深色", system: "跟随系统" };
 
 /**
  * 固定系统菜单按钮（可拖出顶栏脱离为子窗口）：
@@ -87,7 +82,7 @@ function FixedNavButton({ to, label, end, barRef, onCtx }: {
 }
 
 export default function AppShell() {
-  const { theme, set, isDark } = useTheme();
+  const { isDark } = useTheme();
   const conn = useConnStore((s) => s.status);
   const lastError = useConnStore((s) => s.lastError);
   const [token, setToken] = useState(() => localStorage.getItem("daybreak.token") ?? "");
@@ -330,19 +325,13 @@ export default function AppShell() {
           <button className="settings-btn" onClick={() => openModal()} title="工具箱设置">
             <Settings size={16} /> 工具箱设置
           </button>
-          <div className="theme-toggle-group" role="group" aria-label="主题">
-            {/* 单按钮循环切换：浅色 → 深色 → 跟随系统（图标 = 当前主题） */}
-            <button
-              className="theme-toggle active"
-              onClick={() => set(THEME_NEXT[theme])}
-              title={`当前：${THEME_LABEL[theme]}，点击切换到「${THEME_LABEL[THEME_NEXT[theme]]}」`}
-            >
-              {theme === "light" ? <Sun size={16} /> : theme === "dark" ? <Moon size={16} /> : <Monitor size={16} />}
-            </button>
-          </div>
-          {/* 自定义窗口控件（仅无边框窗口形态：原生标题栏已移除，窗口操作在此） */}
+          {/* 自定义窗口控件（仅无边框窗口形态：原生标题栏已移除，窗口操作在此；顺序=原生 最小化/最大化/关闭）
+              主题切换已移除（v2.0.9 起）：主题在「工具箱设置 → 通用设置 → 外观」配置，顶栏 logo 自动跟随 */}
           {windowed ? (
             <>
+              <button className="win-ctrl" onClick={() => { void sendCommand("window.minimize", {}).catch(() => {}); }} title="最小化窗口">
+                <Minimize size={16} />
+              </button>
               <button className="win-ctrl" onClick={() => void toggleMaximize()} title={maximized ? "还原窗口" : "最大化窗口"}>
                 {maximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
               </button>

@@ -32,10 +32,11 @@ def test_window_rect_no_window_returns_none():
 
 
 def test_window_move_resize_no_window_guard():
-    """无窗口守卫：move/resize/maximize 返回结构化错误而非异常。"""
+    """无窗口守卫：move/resize/maximize/minimize 返回结构化错误而非异常。"""
     for fn, args in (
         (bmain.move_window, (10, 20)),
         (bmain.resize_window, (1024, 768)),
+        (bmain.minimize_window, ()),
     ):
         r = fn(*args)
         assert r["ok"] is False and "error" in r
@@ -53,6 +54,23 @@ def test_clamp_window_size_min():
 
 
 def test_max_state_default():
-    """最大化状态机默认值（未最大化、无保存几何）。"""
+    """最大化状态机默认值（未最大化、无保存几何；几何由 toggle_maximize 自行记忆）。"""
     assert bmain._MAX_STATE["maximized"] is False
     assert bmain._MAX_STATE["saved"] is None
+
+
+def test_win_work_areas_lists_monitors():
+    """Windows：显示器枚举回调参数正确 → 至少枚举出 1 个 (物理边界, 物理工作区) 元组
+    （回归 v2.0.8 回调 3 参 bug）。"""
+    import sys
+    if sys.platform != "win32":
+        return
+    mons = bmain._win_work_areas()
+    assert len(mons) >= 1, "显示器枚举失败（回调签名回归？）"
+    mon, work = mons[0]
+    assert len(mon) == 4 and len(work) == 4
+    for v in mon + work:
+        assert isinstance(v, int)
+    assert work[2] > 0 and work[3] > 0
+    # 工作区 ⊆ 显示器边界（任务栏可能吃掉一边）
+    assert work[2] <= mon[2] + 4 and work[3] <= mon[3] + 4

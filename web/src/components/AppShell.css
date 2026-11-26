@@ -185,27 +185,7 @@
 .nav-bar-row__btn:active { cursor: grabbing; }
 .nav-bar-row__btn.drop-target { background: var(--accent-lo); box-shadow: inset 2px 0 0 var(--accent); }
 
-/* 主题循环切换（单按钮）：浅色 → 深色 → 跟随系统，图标展示当前主题 */
-.theme-toggle-group {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
-  overflow: hidden;
-}
-.theme-toggle-group .theme-toggle {
-  display: flex; align-items: center; justify-content: center;
-  width: 32px; height: 30px;
-  border: none; border-radius: 0;
-  background: transparent;
-  color: var(--muted); cursor: pointer;
-}
-.theme-toggle-group .theme-toggle + .theme-toggle { border-left: 1px solid var(--border); }
-.theme-toggle-group .theme-toggle:hover { color: var(--text); background: var(--heading-active); }
-.theme-toggle-group .theme-toggle.active { background: var(--accent-lo); color: var(--accent); }
-.theme-toggle-group .theme-toggle.active + .theme-toggle { border-left: 1px solid var(--accent-lo); }
-
-/* 右侧操作区：工具箱设置 + 主题切换 */
+/* 右侧操作区：工具箱设置 + 窗口控件（v2.0.9 起顶栏无主题切换钮：主题在 工具箱设置→通用设置→外观 配置） */
 .menu-bar-right {
   display: flex;
   align-items: center;

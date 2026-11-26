@@ -55,7 +55,7 @@ python -m bridge.smoke
 
 | 平台 | 附件 | 说明 |
 | --- | --- | --- |
-| Windows | `Daybreak-Toolbox-<版本>-win-x64.zip` | 解压后运行 `DaybreakToolbox.exe`：**直接弹出原生应用窗口**（v2.0.3 起，WebView2 渲染；托盘常驻） |
+| Windows | `Daybreak-Toolbox-<版本>-win-setup.exe`（**v2.0.9 起推荐**：安装程序，安装时可选路径，默认 `%LOCALAPPDATA%\DaybreakToolbox` 免管理员，含快捷方式/卸载项）或 `Daybreak-Toolbox-<版本>-win-x64.zip`（绿色版：解压后运行 `DaybreakToolbox.exe`） | 直接弹出原生应用窗口（v2.0.3 起，WebView2 渲染；托盘常驻；v2.0.8 起无边框窗口，窗口操作在顶栏） |
 | macOS | `Daybreak-Toolbox-<版本>-mac-arm64.zip` / `mac-x64.zip` | 双击 `DaybreakToolbox.app`；首次 右键→打开 绕过 Gatekeeper（窗口形态依赖系统 WebView；缺失时自动降级浏览器） |
 | Linux | `Daybreak-Toolbox-<版本>-linux-x64.zip` | 解压后运行 `./DaybreakToolbox`（需系统含 GTK/WebKit 运行库；无窗口引擎时降级浏览器形态；托盘仅 Windows 生效） |
 
@@ -169,6 +169,13 @@ Base64 / URL / Unicode / JSON / MD5 / 乱码恢复。
 - 工具箱本身是学习研究工具，请仅对你有权限的系统使用
 
 # 七、更新记录
+
+## v2.0.9
+
+1、Windows 安装程序（Inno Setup）：Release 新增 **win-setup.exe** 安装程序（安装时可选路径，默认 `%LOCALAPPDATA%\DaybreakToolbox` 免管理员；开始菜单/桌面快捷方式 + 卸载项）；原 zip 绿色版保留
+2、顶栏右侧新增 **最小化** 按钮（-），窗口控件顺序 最小化 / 最大化·还原 / 关闭
+3、修复 v2.0.8 最大化卡死 bug（多次点击切换无效果）：显示器枚举回调参数错位 + 原生/手动最大化状态失步，现统一为原生状态转换 + 工作区钳制
+4、移除顶栏主题切换按钮：主题统一在「工具箱设置 → 通用设置 → 外观」配置，顶栏 Logo 自动跟随
 
 ## v2.0.8
 

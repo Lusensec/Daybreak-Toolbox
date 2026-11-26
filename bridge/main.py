@@ -519,12 +519,16 @@ def _register_builtin_commands() -> None:
     async def _window_maximize(_p, _ws):
         return await asyncio.to_thread(toggle_maximize)
 
+    async def _window_minimize(_p, _ws):
+        return await asyncio.to_thread(minimize_window)
+
     _bus.register("app.env", _app_env)
     _bus.register("app.quit", _app_quit)
     _bus.register("window.get_rect", _window_get_rect)
     _bus.register("window.move", _window_move)
     _bus.register("window.resize", _window_resize)
     _bus.register("window.maximize", _window_maximize)
+    _bus.register("window.minimize", _window_minimize)
 
     # ---- SSH 终端（config/ssh_hosts.json 主机表 + 常驻 paramiko 会话；会话断开广播 ssh.closed）----
     def _ssh_call(fn, *a, **kw):
@@ -590,7 +594,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.8", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.9", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -773,10 +777,9 @@ def resize_window(width, height) -> dict:
 _MAX_STATE = {"maximized": False, "saved": None}
 
 
-def _win_screens_info() -> list:
-    """各显示器 物理区 + 工作区（物理 px，ctypes）+ 对应逻辑工作区（Windows only）。
-    工作区逻辑坐标 = 目标屏逻辑原点 + (rcWork - rcMonitor) / 屏 scale；
-    屏 scale 从 pywebview.screens（逻辑值 + physical_* 属性）按物理边界匹配，缺失按 1.0。"""
+def _win_work_areas() -> "list[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]]":
+    """各显示器 (物理边界, 物理工作区)。DPI aware 进程里 EnumDisplayMonitors/GetMonitorInfoW
+    返回物理坐标；move/resize 入参（pywebview 逻辑）× 窗口 scale = 物理 → 同空间可比。"""
     import ctypes
     user32 = ctypes.windll.user32
 
@@ -788,117 +791,115 @@ def _win_screens_info() -> list:
         _fields_ = [("cbSize", ctypes.c_uint32), ("rcMonitor", RECT),
                     ("rcWork", RECT), ("dwFlags", ctypes.c_uint32)]
 
-    mons: "list[tuple[RECT, RECT]]" = []
+    mons: "list[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]]" = []
 
-    def cb(hMon, _h, _lprc, _dw):
+    def cb(hMon, _hdc, _lprc, _dw):
         mi = MONITORINFO()
         mi.cbSize = ctypes.sizeof(MONITORINFO)
         user32.GetMonitorInfoW(hMon, ctypes.byref(mi))
-        mons.append((mi.rcMonitor, mi.rcWork))
+        mon = (mi.rcMonitor.left, mi.rcMonitor.top,
+               mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top)
+        work = (mi.rcWork.left, mi.rcWork.top,
+                mi.rcWork.right - mi.rcWork.left, mi.rcWork.bottom - mi.rcWork.top)
+        mons.append((mon, work))
         return True
 
-    _cb_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+    _cb_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong)
     user32.EnumDisplayMonitors(None, None, _cb_type(cb), None)
-
-    try:
-        import webview as _webview
-        screens = _webview.screens()
-    except Exception:
-        screens = []
-
-    out = []
-    for mon, work in mons:
-        screen = None
-        for s in screens:
-            if (abs(s.physical_x - mon.left) <= 2 and abs(s.physical_y - mon.top) <= 2
-                    and abs(s.physical_width - (mon.right - mon.left)) <= 2
-                    and abs(s.physical_height - (mon.bottom - mon.top)) <= 2):
-                screen = s
-                break
-        scale = float(screen.scale) if screen is not None else 1.0
-        lx = screen.x if screen is not None else mon.left
-        ly = screen.y if screen is not None else mon.top
-        out.append({
-            "log_x": lx + int((work.left - mon.left) / scale),
-            "log_y": ly + int((work.top - mon.top) / scale),
-            "log_w": int((work.right - work.left) / scale),
-            "log_h": int((work.bottom - work.top) / scale),
-            "mon_left": mon.left, "mon_top": mon.top,
-            "mon_w": mon.right - mon.left, "mon_h": mon.bottom - mon.top,
-        })
-    return out
+    return mons
 
 
-def _win_maximize_target():
-    """窗口所在显示器工作区（逻辑像素 x,y,w,h）；取不到返回 None（调用方落原生 maximize）。
-    手动版原因：WinForms 无边框窗口 WindowState=Maximized 会盖住任务栏。"""
+def _window_dpi_scale() -> float | None:
+    """窗口所在显示器 scale（GetDpiForWindow/96 —— 与 WinForms 后端 move/resize 换算同源）。"""
     w = _active_window()
     if w is None:
         return None
-    # 窗口物理中心：WinForms 表单（Window.native）直接读（物理像素），失败则按主屏 scale 近似
-    cx_phys = cy_phys = None
     try:
-        form = w.native
-        cx_phys = form.Left + form.Width // 2
-        cy_phys = form.Top + form.Height // 2
+        import ctypes
+        handle = int(w.native.Handle)
+        dpi = ctypes.windll.user32.GetDpiForWindow(handle)
+        return (dpi / 96.0) if dpi >= 96 else 1.0
     except Exception:
-        try:
-            import webview as _webview
-            scr = _webview.screens()[0]
-            cx_phys = int((w.x + w.width // 2) * scr.scale)
-            cy_phys = int((w.y + w.height // 2) * scr.scale)
-        except Exception:
-            return None
-    infos = _win_screens_info()
-    if not infos:
         return None
+
+
+def _win_maximize_target():
+    """窗口所在显示器工作区（move/resize 入参 = 物理工作区 ÷ 窗口 scale）；取不到返回 None。
+    手动版原因：无边框窗口 WindowState=Maximized 会盖任务栏，且原生最大化后手动
+    move/resize 不重置 WindowState → 状态失步（v2.0.8 卡死 bug 根因之一）。"""
+    w = _active_window()
+    r = window_rect()
+    scale = _window_dpi_scale()
+    if w is None or r is None or scale is None:
+        return None
+    mons = _win_work_areas()
+    if not mons:
+        return None
+    # 窗口物理中心 = 回读中心 × 窗口 scale（回读值即 物理÷scale）
+    cx_phys = (r["x"] + r["width"] // 2) * scale
+    cy_phys = (r["y"] + r["height"] // 2) * scale
     pick = None
-    for m in infos:
-        if m["mon_left"] <= cx_phys < m["mon_left"] + m["mon_w"] and \
-           m["mon_top"] <= cy_phys < m["mon_top"] + m["mon_h"]:
-            pick = m
+    for mon, _work in mons:
+        ml, mt, mw, mh = mon
+        # ±20% 容差命中（跨屏中心歧义时取先命中者；主屏在前）
+        if ml - mw * 0.2 <= cx_phys <= ml + mw * 1.2 and mt - mh * 0.2 <= cy_phys <= mt + mh * 1.2:
+            pick = (mon, _work)
             break
     if pick is None:
-        pick = infos[0]
-    return (pick["log_x"], pick["log_y"], pick["log_w"], pick["log_h"])
+        pick = mons[0]
+    _mon, work = pick
+    wl, wt, ww, wh = work
+    return (int(wl / scale), int(wt / scale), int(ww / scale), int(wh / scale))
 
 
 def toggle_maximize() -> dict:
-    """最大化/还原 toggle。Windows：手动工作区版（避开无边框盖任务栏）；其它平台：原生 maximize/restore。
-    返回 {"maximized": bool} 供 web 端切换图标。最大化态手动 resize 后还原会回到「最大化前」几何（可接受）。"""
+    """最大化/还原 toggle。
+    Windows：全程手动 move/resize（WindowState 保持 Normal，避免无边框原生最大化
+    盖任务栏 + 状态失步的 v2.0.8 卡死 bug）；几何由本函数记忆。
+    macOS/Linux：原生 maximize()/restore()（无边框下行为正常）。
+    返回 {"maximized": bool} 供 web 端切换图标。"""
     global _MAX_STATE
     w = _active_window()
     if w is None:
         return {"ok": False, "error": "window unavailable"}
     try:
-        if sys.platform == "win32":
-            if _MAX_STATE["maximized"]:
+        if _MAX_STATE["maximized"]:
+            if sys.platform == "win32":
                 x, y, ww, hh = _MAX_STATE["saved"] or (0, 0, 1280, 800)
                 w.move(x, y)
                 w.resize(ww, hh)
-                _MAX_STATE["maximized"] = False
-                _MAX_STATE["saved"] = None
-                return {"ok": True, "maximized": False}
+            else:
+                w.restore()
+            _MAX_STATE = {"maximized": False, "saved": None}
+            return {"ok": True, "maximized": False}
+        # 最大化
+        if sys.platform == "win32":
             r = window_rect()
             if r is None:
                 return {"ok": False, "error": "window unavailable"}
-            _MAX_STATE["saved"] = (r["x"], r["y"], r["width"], r["height"])
+            _MAX_STATE = {"maximized": True, "saved": (r["x"], r["y"], r["width"], r["height"])}
             target = _win_maximize_target()
             if target:
                 w.move(target[0], target[1])
                 w.resize(target[2], target[3])
-            else:  # ctypes 枚举失败兜底：原生最大化（可能盖任务栏，仅兜底路径）
+            else:  # 枚举失败兜底：原生最大化（可能盖任务栏，罕见）
                 w.maximize()
-            _MAX_STATE["maximized"] = True
-            return {"ok": True, "maximized": True}
-        # macOS / Linux：原生最大化（无边框窗口在 cocoa/gtk 下 maximize 行为正常）
-        if _MAX_STATE["maximized"]:
-            w.restore()
-            _MAX_STATE["maximized"] = False
         else:
+            _MAX_STATE = {"maximized": True, "saved": None}
             w.maximize()
-            _MAX_STATE["maximized"] = True
-        return {"ok": True, "maximized": _MAX_STATE["maximized"]}
+        return {"ok": True, "maximized": True}
+    except Exception as e:
+        _MAX_STATE = {"maximized": False, "saved": None}  # 失败回位状态机，防失步
+        return {"ok": False, "error": str(e)}
+
+
+def minimize_window() -> dict:
+    w = _active_window()
+    if w is None:
+        return {"ok": False, "error": "window unavailable"}
+    try:
+        w.minimize()  # 原生最小化（winforms 后端 Invoke 线程 marshaling；任务栏图标可还原/关闭兜底）
+        return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
