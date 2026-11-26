@@ -44,7 +44,7 @@ Source: "{#ExePath}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Daybreak Toolbox"; Filename: "{app}\DaybreakToolbox.exe"
-Name: "{group}\Uninstall Daybreak Toolbox"; Filename: "{uninstalldatakey}\Setup.exe", Parameters: "/UNINSTALL"
+; 开始菜单卸载项由 Inno 自动生成（[Setup] UninstallDisplayName/UninstallDisplayIcon）
 Name: "{autodesktop}\Daybreak Toolbox"; Filename: "{app}\DaybreakToolbox.exe"; Tasks: desktopicon
 
 [Run]
