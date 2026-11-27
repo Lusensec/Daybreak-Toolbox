@@ -92,6 +92,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     { v: "dark", label: "深色", icon: Moon },
     { v: "system", label: "跟随系统", icon: Monitor },
   ];
+  // v2.0.15「关闭后进入最小化」：桥接侧共享偏好（config/settings.json），开启后
+  // 顶栏 X / Alt+F4 → 最小化驻留托盘（托盘菜单唤回），而非退出进程；切换即时生效无需重启
+  const [closeToTray, setCloseToTray] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   // 打开定位参数（store 提供，打开后消费一次）：指定标签页 + 工具管理内预选 菜单栏/导航栏
@@ -555,6 +558,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   // 关闭时清掉单向拉伸锚点（pin 是视口坐标，跨次打开残留会漂到旧位置）
   useEffect(() => { if (!open) setPin(null); }, [open]);
 
+  // v2.0.15：打开模态时加载「关闭后进入最小化」当前值（settings.get）
+  useEffect(() => {
+    if (!open) return;
+    sendCommand("settings.get", {})
+      .then((r) => setCloseToTray(Boolean((r as { close_to_tray?: boolean }).close_to_tray)))
+      .catch(() => setCloseToTray(false));
+  }, [open]);
+
   if (!open) return null;
 
   async function run(fn: () => Promise<unknown>, okMsg: string) {
@@ -672,6 +683,31 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     );
                   })}
                   <span className="settings-sub__hint">切换即时生效，选择保存在本地（刷新保持）</span>
+                </div>
+              </div>
+
+              <div className="menu-vis-group">
+                <div className="menu-vis-group__title">窗口</div>
+                <div className="form-row">
+                  <button
+                    type="button"
+                    className={"form-btn" + (closeToTray ? " primary" : "")}
+                    title={closeToTray ? "已开启：关闭按钮/Alt+F4 最小化到托盘" : "开启后关闭按钮/Alt+F4 最小化到托盘"}
+                    disabled={busy || closeToTray === null}
+                    onClick={() => {
+                      const next = !(closeToTray === true);
+                      void run(async () => {
+                        await sendCommand("settings.set", { close_to_tray: next });
+                        setCloseToTray(next);
+                      }, next
+                        ? "已开启：关闭按钮/Alt+F4 将最小化到托盘（托盘菜单可唤回）"
+                        : "已关闭：关闭按钮/Alt+F4 恢复为退出程序");
+                    }}                  >
+                    <Minimize2 size={13} /> {closeToTray === null ? "加载中…" : "关闭后进入最小化"}
+                  </button>
+                  <span className="settings-sub__hint">
+                    开启后点顶栏「关闭（×）」或 Alt+F4 时最小化到托盘而非退出程序；托盘菜单「打开…」可重新唤回，托盘「退出破晓工具箱」为真正的退出
+                  </span>
                 </div>
               </div>
             </div>

@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation } from "react-router";
 import { Wifi, WifiOff, Settings, Maximize, Copy, Minus, X } from "lucide-react";
 import { useTheme } from "../theme/ThemeProvider";
-import { connectBridge, disconnectBridge, useConnStore, sendCommand, fetchBridgeToken } from "../services/ws";
+import { connectBridge, disconnectBridge, useConnStore, sendCommand, fetchBridgeToken, subscribeEvent } from "../services/ws";
 import { DynamicMenuNav, NavBarRow, CtxMenu } from "./DynamicMenuNav";
 import type { CtxState } from "./DynamicMenuNav";
 import { ToastHost, useToast } from "./toast";
@@ -101,6 +101,8 @@ export default function AppShell() {
   // ---- 自定义窗口控件（v2.0.8 起窗口形态为无边框：顶栏驱动 移动/最大化/拉伸/关闭；非窗口形态不渲染）----
   const [windowed, setWindowed] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  // v2.0.15「关闭后进入最小化」状态（settings.get；仅影响 X 按钮提示文案——行为由桥接侧统一判定）
+  const [closeToTray, setCloseToTray] = useState<boolean | null>(null);
   const dragState = useRef<{ active: boolean; sx: number; sy: number; ox: number; oy: number } | null>(null);
 
   /** 顶栏非交互目标判定：按钮/链接/输入控件/可脱离项 不参与拖移（品牌区、栏间隙可拖） */
@@ -277,8 +279,16 @@ export default function AppShell() {
     sendCommand("app.env", {})
       .then((r) => { if ((r as { windowed?: boolean }).windowed) { setWindowed(true); } })
       .catch(() => {});
+    // v2.0.15：关闭行为提示（X 按钮 tooltip）——设置即时生效，改键时经 settings.changed 同步
+    sendCommand("settings.get", {})
+      .then((r) => setCloseToTray(Boolean((r as { close_to_tray?: boolean }).close_to_tray)))
+      .catch(() => {});
+    const unsubSettings = subscribeEvent("settings.changed", (p) => {
+      setCloseToTray(Boolean((p as { close_to_tray?: boolean }).close_to_tray));
+    });
     return () => {
       disconnectBridge();
+      unsubSettings();
       sub();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -365,7 +375,11 @@ export default function AppShell() {
               <button className="win-ctrl" onClick={() => void toggleMaximize()} title={maximized ? "还原窗口" : "最大化窗口"}>
                 {maximized ? <Copy size={16} /> : <Maximize size={16} />}
               </button>
-              <button className="win-ctrl win-ctrl--close" onClick={() => { void sendCommand("app.quit", {}).catch(() => {}); }} title="关闭破晓·工具箱">
+              <button
+                className="win-ctrl win-ctrl--close"
+                onClick={() => { void sendCommand("app.quit", {}).catch(() => {}); }}
+                title={closeToTray ? "最小化到托盘（托盘菜单可重新打开；托盘「退出」为真正退出）" : "关闭破晓·工具箱"}
+              >
                 <X size={16} />
               </button>
             </>

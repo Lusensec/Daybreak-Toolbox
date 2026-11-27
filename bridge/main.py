@@ -507,12 +507,31 @@ def _register_builtin_commands() -> None:
     _bus.register("shortcut.get", _shortcut_get)
     _bus.register("shortcut.set", _shortcut_set)
 
+    # ---- 通用设置（v2.0.15 config/settings.json：close_to_tray 等前后端共享偏好）----
+    from . import settings_service as _settings_mod
+
+    async def _settings_get(_p, _ws):
+        return await asyncio.to_thread(_settings_mod.get_all)
+
+    async def _settings_set(p, _ws):
+        try:
+            r = await asyncio.to_thread(_settings_mod.set, p)
+        except _settings_mod.SettingsError as e:
+            raise BridgeError(e.code, e.message)
+        await _bus.broadcast("settings.changed", r)  # 多客户端同步（第二 webview/浏览器端同显）
+        return {"ok": True, **r}
+
+    _bus.register("settings.get", _settings_get)
+    _bus.register("settings.set", _settings_set)
+
     # ---- 应用形态 / 自定义窗口控件（v2.0.8 无边框窗口：web 顶栏驱动 移动/最大化/拉伸/关闭）----
     async def _app_env(_p, _ws):
         return get_app_env()
 
     async def _app_quit(_p, _ws):
-        await asyncio.to_thread(quit_app)  # 不返回（进程终止）
+        # v2.0.15：「关闭后进入最小化」开启时 quit_app 最小化驻留托盘并返回 ack（不终止进程）；
+        # 否则进程终止（本 handler 不返回）
+        return await asyncio.to_thread(quit_app)
 
     async def _window_get_rect(_p, _ws):
         return {"rect": await asyncio.to_thread(window_rect)}
@@ -605,7 +624,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.14", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.15", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -1120,8 +1139,79 @@ def minimize_window() -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def quit_app() -> None:
-    """关闭应用程序：终止全进程（与托盘「退出破晓工具箱」同语义；daemon 线程随进程消失）。"""
+def _install_closing_hook() -> None:
+    """v2.0.15：拦截 WinForms Closing 事件（Alt+F4 / 系统级关窗）——「关闭后进入最小化」开启时
+    取消关闭并改为最小化（进程驻留托盘）；关闭时放行（旧语义：窗口销毁 → 退出进程）。
+    事件处理时读盘判定（设置即时生效，无需重启）；best-effort 安装（pythonnet 事件挂接
+    异常 → 打日志退回旧语义，不影响窗口本体）。"""
+    w = _active_window()
+    if w is None:
+        return
+    try:
+        form = w.native  # WinForms Form（仅 win32 后端有 .native；mac/linux 无此钩子——原生关闭行为正常）
+        from System.Windows import FormClosingEventHandler
+
+        def _on_closing(sender, e):
+            try:
+                from . import settings_service
+                if settings_service.get_all().get("close_to_tray") and _active_window() is not None:
+                    e.Cancel = True
+                    _active_window().minimize()
+                    print("[bridge] 系统关窗（Alt+F4）拦截：关闭后进入最小化已开启 → 驻留托盘")
+                    return
+            except Exception as ex:
+                print(f"[bridge] closing hook 异常，放行关闭：{ex}")
+
+        form.Add_Closing(FormClosingEventHandler(None, _on_closing))
+        print("[bridge] 窗口关闭钩子已安装（Alt+F4 遵循「关闭后进入最小化」）")
+    except Exception as e:
+        print(f"[bridge] 窗口关闭钩子安装失败（关闭=退出 旧语义保持）：{e}")
+
+
+def _restore_window() -> bool:
+    """v2.0.15 托盘「打开…」菜单项：已有窗口 → 还原显示并前置（最小化驻留态唤回）；
+    无窗口（服务形态）→ 返回 False，托盘退回 webbrowser 打开浏览器页（旧行为）。"""
+    w = _active_window()
+    if w is None:
+        return False
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            user32 = ctypes.windll.user32
+            h = _handle_int(w)
+            user32.ShowWindow(h, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(h)
+        else:
+            w.restore()
+        return True
+    except Exception as e:
+        print(f"[bridge] 窗口唤回失败：{e}")
+        return False
+
+
+def resolve_close_action(close_to_tray: bool, has_window: bool) -> str:
+    """关闭（app.quit / Alt+F4）动作判定（v2.0.15「关闭后进入最小化」；纯函数可测）：
+    开启且窗口存在 → minimize（驻留托盘）；否则 quit（退出全进程，旧语义）。"""
+    return "minimize" if (close_to_tray and has_window) else "quit"
+
+
+def quit_app() -> dict:
+    """关闭应用程序（web 顶栏 X；Alt+F4 经 Closing 钩子走同一判定）。
+    v2.0.15：「关闭后进入最小化」开启且窗口存在 → 最小化驻留托盘（可经托盘菜单唤回）；
+    否则终止全进程（与托盘「退出破晓工具箱」同语义；daemon 线程随进程消失）。"""
+    from . import settings_service
+    w = _active_window()
+    try:
+        close_to_tray = bool(settings_service.get_all().get("close_to_tray"))
+    except Exception:
+        close_to_tray = False
+    if resolve_close_action(close_to_tray, w is not None) == "minimize":
+        try:
+            w.minimize()
+            print("[bridge] 关闭→最小化（驻留托盘；托盘菜单可重新打开）")
+            return {"ok": True, "minimized": True, "quit": False}
+        except Exception as e:
+            print(f"[bridge] 最小化失败，退回退出进程：{e}")
     print("[bridge] app.quit requested; exiting process")
     os._exit(0)
 
@@ -1166,7 +1256,7 @@ def run_windowed(port: Optional[int] = None) -> None:
 
     _pr = _project_root()
     _WINDOWED_UI = True  # app.env → web 端渲染 关闭X/最大化/拖移/拉伸 控件
-    start_tray(port, root=_pr)
+    start_tray(port, root=_pr, restore_fn=_restore_window)  # v2.0.15：托盘「打开…」优先唤回窗口
 
     try:
         import webview
@@ -1174,6 +1264,7 @@ def run_windowed(port: Optional[int] = None) -> None:
         webview.create_window("破晓·工具箱", url, width=1280, height=800,
                               resizable=True, min_size=(960, 600), frameless=True)
         _perf("windowed.window_created")
+        _install_closing_hook()  # v2.0.15：Alt+F4 遵循「关闭后进入最小化」
         webview.start()  # 阻塞：主线程窗口消息循环；窗口关闭后返回
     except Exception as e:
         print(f"[bridge] 窗口模式不可用（{type(e).__name__}: {e}）；降级服务模式，用默认浏览器打开界面")
@@ -1181,8 +1272,9 @@ def run_windowed(port: Optional[int] = None) -> None:
         _threading.Event().wait()  # 服务模式：保持进程存活（uvicorn/托盘为 daemon 线程）
         return
 
-    # 窗口关闭 → 退出全进程（与托盘「退出」同语义）
-    print("[bridge] 窗口已关闭，退出进程（想服务常驻请用 --service 参数启动）")
+    # 窗口关闭 → 退出全进程（与托盘「退出」同语义；「关闭后进入最小化」开启时 X/Alt+F4 走
+    # 最小化不会到这里；到这里说明窗口被系统销毁且钩子未生效 → 提示常驻服务形态）
+    print("[bridge] 窗口已关闭，退出进程（想服务常驻请用 --service 参数启动；或开启 通用设置→关闭后进入最小化）")
     os._exit(0)
 
 

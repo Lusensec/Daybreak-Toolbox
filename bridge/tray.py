@@ -70,10 +70,13 @@ def _open_url(port: int, path: str) -> None:
     webbrowser.open(f"http://127.0.0.1:{port}{path}")
 
 
-def start_tray(port: int, root: Path | None = None) -> bool:
-    """启动托盘（v2.0.14：pystray 导入/图标渲染/消息循环全在 daemon 线程，主线程零阻塞——
-    旧版在主线程 import pystray+Pillow 并渲染图标后才开窗口，拖慢启动 0.2–0.5s）。
-    返回是否已发起；失败仅记日志，不抛。root：项目根（托盘图标取系统 logo；None 走手绘兜底）。"""
+def start_tray(port: int, root: Path | None = None,
+               restore_fn: "Callable[[], bool] | None" = None) -> bool:
+    """启动托盘（v2.0.14：pystray 导入/图标渲染/消息循环全在 daemon 线程，主线程零阻塞）。
+    返回是否已发起；失败仅记日志，不抛。
+    root：项目根（托盘图标取系统 logo；None 走手绘兜底）。
+    restore_fn（v2.0.15）：「打开…」菜单项先尝试唤回已有窗口（返回 True = 已处理）；
+    None / 返回 False → 旧行为 webbrowser.open（服务形态无窗口）。"""
     if os.environ.get("DAYBREAK_NO_TRAY") == "1":
         log.info("tray disabled by DAYBREAK_NO_TRAY=1")
         return False
@@ -97,6 +100,12 @@ def start_tray(port: int, root: Path | None = None) -> bool:
             # 注意：pystray 用 co_argcount 校验 action，lambda 带默认参数会算成 3 参被拒 → 用 def 闭包
             def _make_page(label: str, path: str) -> "MenuItem":
                 def action(icon, item):
+                    # v2.0.15：优先唤回已有窗口（最小化驻留态）；无窗口才开浏览器
+                    try:
+                        if restore_fn is not None and restore_fn() is True:
+                            return
+                    except Exception:
+                        pass
                     _open_url(port, path)
 
                 return MenuItem(label, action)
