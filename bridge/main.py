@@ -624,7 +624,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.15", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.16", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -790,7 +790,9 @@ def move_window(x: int, y: int) -> dict:
     try:
         mons = _monitor_info_safe()
         px, py, _pw, _ph = _logical_to_physical(int(x), int(y), 0, 0, mons)
-        _set_window_geometry_phys(w, px, py, 0, 0, keep_size=True)
+        # v2.0.16：顶栏拖拽流（60fps 连发）不串行等 120ms —— 同步 SetWindowPos 连发安全，
+        # 落定延时留给一次性状态变更（settle 默认 True 的调用方）
+        _set_window_geometry_phys(w, px, py, 0, 0, keep_size=True, settle=False)
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -988,14 +990,19 @@ import threading as _threading
 _geo_lock = _threading.Lock()
 
 
-def _set_window_geometry_phys(w, px, py, pw, ph, keep_size: bool = False) -> None:
+def _set_window_geometry_phys(w, px, py, pw, ph, keep_size: bool = False,
+                              settle: bool = True) -> None:
     """单次原子 SetWindowPos（**物理**入参；位置+大小一次提交）。
     为什么不用 pywebview 的 w.move()+w.resize() 两步：
-    - 两步跨线程 SetWindowPos 快速连发时，WinForms UI 线程未消化完上一笔 WM_MOVE/WM_SIZE，
+    - 两步跨线程 .NET Invoke 快速连发时，WinForms UI 线程未消化完上一笔 WM_MOVE/WM_SIZE，
       第二笔被丢弃/半应用（v2.0.10 冒烟实测：快连点还原不生效，慢速则正常）；
     - 后端 resize 内部读 Location 决定固定点，跨线程读到旧值会把窗口钉回错误位置。
-    串行锁 + 120ms 落定延时保证 UI 线程消化完再放行下一笔；ShowWindow(Normal) 清残留 showCmd。
-    keep_size=True 时忽略 pw/ph，保持窗口当前物理尺寸（move 用）。"""
+    串行锁保证原子性；ShowWindow(Normal) 清残留 showCmd。
+    keep_size=True 时忽略 pw/ph，保持窗口当前物理尺寸（move 用）。
+    settle（v2.0.16）：120ms 落定延时 —— 仅「一次性状态变更」（最大化/还原/单条 resize）需要，
+    给 WebView2 布局留消化时间；**连续拖拽流**（顶栏 move / 边缘 set_rect，60fps）置 False：
+    直接 SetWindowPos 是同步 Win32 调用（非 .NET Invoke），连发无吞包，120ms 串行会把拖动
+    限速到 8Hz（明显滞后）并堵满 FIFO 队列（其他命令如 tool.grid 排队超时）。"""
     import ctypes
     import time
     with _geo_lock:
@@ -1006,16 +1013,17 @@ def _set_window_geometry_phys(w, px, py, pw, ph, keep_size: bool = False) -> Non
             pw, ph = (cur[2], cur[3]) if cur else (int(pw), int(ph))
         user32.SetWindowPos(handle, None, int(px), int(py), int(pw), int(ph), 0x04 | 0x40 | 0x10)
         user32.ShowWindow(handle, 1)  # SW_SHOWNORMAL：清残留 Maximized/Minimized 状态
-        time.sleep(0.12)  # 让 UI 线程消化 WM_MOVE/WM_SIZE，下一笔才不会被吞
+        if settle:
+            time.sleep(0.12)  # 让 UI 线程消化 WM_MOVE/WM_SIZE，下一笔才不会被吞
 
 
-def _set_window_geometry(w, x, y, ww, hh) -> None:
+def _set_window_geometry(w, x, y, ww, hh, settle: bool = True) -> None:
     """**逻辑**入参（web 端 screenX/screenY 同空间，主屏基准）的窗口几何应用：
     v2.0.14 经 per-monitor scale 模型换算成物理后原子提交（混合 DPI 跨屏不再漂移；
-    无显示器信息时退化为单屏主 scale 直乘 = 旧行为）。"""
+    无显示器信息时退化为单屏主 scale 直乘 = 旧行为）。settle 见 _set_window_geometry_phys。"""
     mons = _monitor_info_safe()
     px, py, pw, ph = _logical_to_physical(x, y, ww, hh, mons)
-    _set_window_geometry_phys(w, px, py, pw, ph)
+    _set_window_geometry_phys(w, px, py, pw, ph, settle=settle)
 
 
 def _handle_int(w) -> int:
@@ -1122,7 +1130,8 @@ def set_window_rect(x, y, w, h) -> dict:
         return {"ok": False, "error": "window unavailable"}
     try:
         cw, ch = _clamp_window_size(w, h)
-        _set_window_geometry(w_win, int(x), int(y), cw, ch)
+        # v2.0.16：边缘拖拽流（连续 set_rect）不串行等 120ms（同上：同步 SetWindowPos 连发安全）
+        _set_window_geometry(w_win, int(x), int(y), cw, ch, settle=False)
         return {"ok": True, "x": int(x), "y": int(y), "width": cw, "height": ch}
     except Exception as e:
         return {"ok": False, "error": str(e)}

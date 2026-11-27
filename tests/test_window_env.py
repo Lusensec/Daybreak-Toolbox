@@ -146,3 +146,40 @@ def test_maximize_target_mixed_dpi():
     assert bmain._physical_to_logical(wl, wt, ww, wh, _MIXED) == (1536, 0, 1600, 900)
     wl, wt, ww, wh = _MIXED[0]["work"]
     assert bmain._physical_to_logical(wl, wt, ww, wh, _MIXED) == (0, 0, 1536, 816)
+
+
+def test_move_no_settle_is_fast(monkeypatch):
+    """v2.0.16：连续 move（settle=False）不串行等 120ms —— 10 笔拖动流 <300ms 完成；
+    settle=True（最大化/还原等一次性状态变更）仍保留 120ms 落定。"""
+    import ctypes
+    import time
+    u32 = ctypes.windll.user32
+    calls: list = []
+
+    def fake_swp(h, _none, x, y, w, hgt, _flags):
+        calls.append((x, y, w, hgt))
+        return 1
+
+    monkeypatch.setattr(u32, "SetWindowPos", fake_swp)
+    monkeypatch.setattr(u32, "ShowWindow", lambda _h, _n: 1)
+
+    class FakeW:
+        class _N:
+            Handle = 12345
+        native = _N()
+
+    w = FakeW()
+    monkeypatch.setattr(bmain, "_get_window_phys", lambda _w: (500, 500, 1600, 1000))
+    monkeypatch.setattr(bmain, "_monitor_info_safe", lambda: [])  # 恒等换算
+
+    t0 = time.perf_counter()
+    for i in range(10):
+        bmain._set_window_geometry_phys(w, 500 + i, 500 + i, 1600, 1000,
+                                        keep_size=True, settle=False)
+    dt_fast = time.perf_counter() - t0
+    assert len(calls) == 10, f"10 笔 SetWindowPos 应全部发出（无吞包），实际 {len(calls)}"
+    assert dt_fast < 0.3, f"无落定 10 笔应 <0.3s（120ms 串行仍在？），实际 {dt_fast:.2f}s"
+
+    t1 = time.perf_counter()
+    bmain._set_window_geometry_phys(w, 0, 0, 1600, 1000, settle=True)
+    assert time.perf_counter() - t1 >= 0.12, "settle=True 路径应仍含 120ms 落定"

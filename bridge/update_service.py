@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.15"
+APP_VERSION = "2.0.16"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,12 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.16":
+"""
+修复拖动主窗口延迟与左右晃动：
+1、顶栏拖拽 / 边缘拉伸的窗口几何应用不再串行等待 120ms 落定（旧版每笔 move/resize 等 120ms → 拖动被限速到 ~8Hz 明显滞后；滞后引发的补偿振荡即「左右晃动」；同时拖拽流堵满命令队列导致其他命令如 tool.grid 排队超时（界面「加载失败: cmd tool.grid timeout」））
+2、直接 Win32 SetWindowPos 为同步调用，连发安全无吞包，拖拽恢复 60fps 跟手；120ms 落定仅保留给 最大化/还原 等一次性状态变更
+""",
     "v2.0.15":
 """
 新增「关闭后进入最小化」通用设置：
