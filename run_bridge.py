@@ -6,9 +6,10 @@
     （首次运行生成用户可写配置；已存在的文件一律不覆盖，保留用户数据）。
 
 打包（Windows 示例，在项目根执行，需先 `pnpm build` 出 web/dist）：
-  pyinstaller --onefile --noconsole --name DaybreakToolbox ^
+  pyinstaller --onedir --noconsole --name DaybreakToolbox ^
       --add-data "web/dist;dist" --add-data "config;config" run_bridge.py
-产物 dist/DaybreakToolbox.exe 与同目录 dist/ 静态文件由程序自解析（bridge/main.py）。
+产物 dist/DaybreakToolbox/DaybreakToolbox.exe（onedir：运行时不再自解压，启动比 onefile 快 ~3s；
+静态文件在 dist/DaybreakToolbox/_internal/dist，由程序经 sys._MEIPASS 自解析）。
 """
 from __future__ import annotations
 

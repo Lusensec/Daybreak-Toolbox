@@ -636,7 +636,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.1.0", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.1.1", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -1644,6 +1644,87 @@ def quit_app() -> dict:
     os._exit(0)
 
 
+# ---- v2.1.1：单实例守卫 / WebView2 持久化缓存 ----
+_SINGLE_INSTANCE_MUTEX = None  # 持引用：进程存活期间互斥量必须保持打开
+_SINGLE_INSTANCE_NAME = "Local\\DaybreakToolbox.SingleInstance"  # Local\ = 每登录会话一个（单测可替换）
+
+
+def _wake_existing_window() -> bool:
+    """唤回已运行实例的窗口（还原最小化 + 置前）；找不到窗口返回 False。
+    窗口标题与 create_window 同源（「破晓·工具箱」）。"""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+        user32.FindWindowW.restype = wintypes.HWND
+        hwnd = user32.FindWindowW(None, "破晓·工具箱")
+        if not hwnd:
+            return False
+        user32.ShowWindow(wintypes.HWND(hwnd), 9)  # SW_RESTORE
+        user32.SetForegroundWindow(wintypes.HWND(hwnd))
+        return True
+    except Exception as e:
+        print(f"[bridge] 唤回已有窗口失败：{e}")
+        return False
+
+
+def _acquire_single_instance() -> bool:
+    """命名互斥量单实例守卫（Local\\ 命名空间 = 每登录会话一个）。
+    True = 本进程唯一，继续启动；False = 已有实例在跑（已尽力唤回其窗口），调用方应退出。
+    非 Windows / 任何异常一律返回 True —— 守卫自身出问题绝不能把用户挡在门外。"""
+    global _SINGLE_INSTANCE_MUTEX
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        h = kernel32.CreateMutexW(None, True, _SINGLE_INSTANCE_NAME)
+        if not h:
+            return True
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            _wake_existing_window()
+            return False
+        _SINGLE_INSTANCE_MUTEX = h
+        return True
+    except Exception as e:
+        print(f"[bridge] 单实例检查跳过（{e}）→ 按常规启动")
+        return True
+
+
+def _webview_storage_path() -> "str | None":
+    """v2.1.1：WebView2 持久化 profile 目录。
+
+    pywebview 默认 private_mode=True → cache_dir 取 tempfile 随机目录，每次冷启动都重建
+    JS 编译/GPU 缓存（实测 WebView2 初始化 ~1.2s）。持久化目录可复用缓存缩短该段。
+    目录带应用版本后缀：升级后自动换新 profile，避免旧 index.html 被缓存导致界面不更新；
+    旧版本目录 best-effort 清理。
+    返回 None = 目录不可用（只读安装位置等）→ 调用方退回私有模式，行为与旧版一致。
+    """
+    try:
+        import shutil
+        if getattr(sys, "frozen", False):
+            base = Path(sys.executable).resolve().parent / "data"
+        else:
+            from .menu_service import project_root as _pr
+            base = Path(_pr()) / "data"
+        name = f"webview2-{APP_VERSION}"
+        target = base / name
+        target.mkdir(parents=True, exist_ok=True)
+        for old in base.glob("webview2-*"):
+            if old.is_dir() and old.name != name:
+                shutil.rmtree(old, ignore_errors=True)
+        return str(target)
+    except Exception as e:
+        print(f"[bridge] WebView2 持久化目录不可用（{e}）→ 退回私有模式")
+        return None
+
+
 def run_windowed(port: Optional[int] = None) -> None:
     """打包窗口模式（方案 A）：主线程跑 pywebview 原生窗口（Windows=WebView2 / macOS=WKWebView /
     Linux=WebKitGTK），加载同源桥接 UI；uvicorn / 托盘均为 daemon 后台线程。
@@ -1658,6 +1739,11 @@ def run_windowed(port: Optional[int] = None) -> None:
     from .menu_service import project_root as _project_root
 
     _perf("windowed.entry")
+    # v2.1.1：单实例守卫——必须在起 uvicorn / 托盘之前判定（避免第二个实例抢端口、
+    # 多出托盘图标；也省掉重复启动的整段开销）。唤回成功即退出本进程。
+    if not _acquire_single_instance():
+        print("[bridge] 检测到已运行实例 → 已唤回其窗口，本进程退出（单实例守卫）")
+        os._exit(0)
     port = port or find_free_port()
     _current_port = port
     app = build_app()
@@ -1698,7 +1784,11 @@ def run_windowed(port: Optional[int] = None) -> None:
                               resizable=False, min_size=(fw, fh), frameless=True)
         _perf("windowed.window_created")
         _install_window_hooks_once()  # v2.0.17：后台等窗体就绪 → Alt+F4 钩子 + WinForms 属性归一化
-        webview.start()  # 阻塞：主线程窗口消息循环；窗口关闭后返回
+        # v2.1.1：持久化 WebView2 profile（复用 JS/GPU 缓存）；目录不可用时退回私有模式
+        _storage = _webview_storage_path()
+        if _storage:
+            print(f"[bridge] WebView2 持久化缓存: {_storage}")
+        webview.start(private_mode=not _storage, storage_path=_storage)  # 阻塞：主线程消息循环
     except Exception as e:
         print(f"[bridge] 窗口模式不可用（{type(e).__name__}: {e}）；降级服务模式，用默认浏览器打开界面")
         _fallback_browser(port, url)

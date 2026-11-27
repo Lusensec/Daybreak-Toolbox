@@ -43,3 +43,7 @@ daybreak.log
 # 本地调试截图 / Agent 工作目录（不随仓库分发）
 smoke_*.png
 .workbuddy/
+
+# 运行时数据（WebView2 持久化缓存、本地构建 venv）
+data/
+.venv_perf/

@@ -31,7 +31,7 @@ def test_app_env_includes_version():
     from bridge.update_service import APP_VERSION
     env = bmain.get_app_env()
     assert env["version"] == APP_VERSION
-    assert APP_VERSION == "2.1.0"  # 锚定单一来源常量值（随当前发行版本更新）
+    assert APP_VERSION == "2.1.1"  # 锚定单一来源常量值（随当前发行版本更新）
 
 
 def test_window_rect_no_window_returns_none():
@@ -389,3 +389,59 @@ def test_drag_redraw_state_defaults():
     """拖拽重绘状态默认未激活（进程启动 / 无拖拽时）。"""
     assert bmain._DRAG_REDRAW["active"] is False
     assert bmain._DRAG_REDRAW["hwnd"] == 0
+
+
+# ---- v2.1.1：单实例守卫 / WebView2 持久化 profile（启动性能改造）----
+import os  # noqa: E402  （追加段局部使用）
+
+
+def test_webview_storage_path_versioned_and_created(monkeypatch, tmp_path):
+    """持久化目录 = <root>/data/webview2-<版本>：带版本后缀 → 升级后自动换新 profile。"""
+    monkeypatch.setattr("bridge.menu_service.project_root", lambda: tmp_path)
+    p = bmain._webview_storage_path()
+    assert p is not None
+    assert os.path.basename(p) == f"webview2-{bmain.APP_VERSION}"
+    assert os.path.isdir(p)
+
+
+def test_webview_storage_path_cleans_old_versions(monkeypatch, tmp_path):
+    """旧版本 profile 目录启动时清理（避免磁盘无限堆积），当前版本保留。"""
+    monkeypatch.setattr("bridge.menu_service.project_root", lambda: tmp_path)
+    old = tmp_path / "data" / "webview2-0.0.1"
+    old.mkdir(parents=True)
+    (old / "junk.bin").write_bytes(b"x" * 64)
+    p = bmain._webview_storage_path()
+    assert not old.exists(), "旧版本 profile 目录应被清理"
+    assert p and os.path.isdir(p)
+
+
+def test_webview_storage_path_unwritable_returns_none(monkeypatch, tmp_path):
+    """目录建不出来（只读安装位置）：返回 None 让调用方退回私有模式，绝不抛异常挡启动。"""
+    monkeypatch.setattr("bridge.menu_service.project_root", lambda: tmp_path)
+    (tmp_path / "data").write_text("not a directory")  # data 是文件 → mkdir 失败
+    assert bmain._webview_storage_path() is None
+
+
+def test_acquire_single_instance_non_windows(monkeypatch):
+    """非 Windows：守卫直接放行（不因平台分支挡住启动）。"""
+    monkeypatch.setattr(bmain.sys, "platform", "linux")
+    assert bmain._acquire_single_instance() is True
+
+
+def test_wake_existing_window_non_windows(monkeypatch):
+    """非 Windows：唤回窗口返回 False（不触 Win32）。"""
+    monkeypatch.setattr(bmain.sys, "platform", "linux")
+    assert bmain._wake_existing_window() is False
+
+
+def test_single_instance_second_acquire_blocked(monkeypatch):
+    """同一互斥量名二次获取 → ERROR_ALREADY_EXISTS → 判定「已有实例」。
+    用独立名字（含 pid），避免与本机正在运行的真实实例撞名导致首次获取就失败。"""
+    if sys.platform != "win32":
+        return
+    monkeypatch.setattr(bmain, "_SINGLE_INSTANCE_NAME", f"Local\\DaybreakToolbox.Test.{os.getpid()}")
+    monkeypatch.setattr(bmain, "_wake_existing_window", lambda: False)
+    monkeypatch.setattr(bmain, "_SINGLE_INSTANCE_MUTEX", None)
+    assert bmain._acquire_single_instance() is True
+    assert bmain._SINGLE_INSTANCE_MUTEX, "首次获取后必须持句柄引用（防 GC 释放互斥量）"
+    assert bmain._acquire_single_instance() is False

@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,14 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.1.1":
+"""
+启动性能优化（双击到界面可用 5.0s → 约 3.0s，同机实测）：
+1、打包方式 onefile → onedir：去掉每次启动把 394 个文件 / 63MB 解压到 %TEMP% 的开销（实测独占 3.0s，且每个文件都要过杀软实时扫描）；顺带不再残留 _MEI 临时目录、进程数减半（无 bootloader 父进程）
+2、WebView2 改用持久化 profile（data/webview2-<版本>）：不再每次启动重建临时缓存目录（减少数百个缓存文件写入与扫描）；目录带版本后缀，升级自动换新，避免旧 index.html 缓存导致界面不更新。注：对启动耗时本身贡献很小（~0.03s，噪声级），剩余 1.2s 主要是 WebView2 环境/浏览器进程创建，非缓存可比
+3、新增单实例守卫（命名互斥量）：重复双击不再起第二个完整实例（约 1.4s 内退出），而是唤回已有窗口并置前
+4、安装包与 zip 分发包随产物改为目录结构：安装包递归安装 _internal/，zip 解压得到单一文件夹（README 在内）
+""",
     "v2.1.0":
 """
 窗口形态定版（合并 2.0.19 + 2.0.20 全部成果）：

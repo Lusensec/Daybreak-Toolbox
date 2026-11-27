@@ -50,28 +50,28 @@ jobs:
         include:
           - os: windows-latest
             artifact-suffix: win-x64
-            pyinstaller: --onefile --noconsole
+            pyinstaller: --onedir --noconsole
             add-data-sep: ";"
             icon: packaging/daybreak_logo.ico
           - os: macos-latest
             artifact-suffix: mac-arm64
-            pyinstaller: --onefile --windowed
+            pyinstaller: --onedir --windowed
             add-data-sep: ":"
             icon: ""
           - os: macos-15
             artifact-suffix: mac-x64
-            pyinstaller: --onefile --windowed
+            pyinstaller: --onedir --windowed
             add-data-sep: ":"
             icon: ""
           - os: ubuntu-24.04
             artifact-suffix: linux-x64
-            pyinstaller: --onefile
+            pyinstaller: --onedir
             add-data-sep: ":"
             icon: ""
           # Windows 安装程序（Inno Setup，windows-latest runner 预装 iscc）：复用 Windows 构建链 + 打包 setup.exe
           - os: windows-latest
             artifact-suffix: win-setup
-            pyinstaller: --onefile --noconsole
+            pyinstaller: --onedir --noconsole
             add-data-sep: ";"
             icon: packaging/daybreak_logo.ico
             build-setup: true
@@ -145,9 +145,20 @@ jobs:
             v*) ver="${{ github.ref_name }}" ;;
             *)  ver="manual" ;;
           esac
-          cp README.md dist/README.md
           out="Daybreak-Toolbox-${ver}-${{ matrix.artifact-suffix }}"
-          python -c "import shutil; shutil.make_archive('${out}', 'zip', 'dist')"
+          # v2.1.1：产物为 onedir（dist/DaybreakToolbox/ 目录，mac 另有 DaybreakToolbox.app）。
+          # 打包根目录按平台选择：mac 保留 .app（双击即用）；windows/linux 打包应用目录本身，
+          # 解压得到单一文件夹（README 放进该文件夹内），避免「解压后先看到一层壳」。
+          if [ -d "dist/DaybreakToolbox.app" ]; then
+            cp README.md dist/README.md
+            python -c "import shutil; shutil.make_archive('${out}', 'zip', 'dist')"
+          elif [ -d "dist/DaybreakToolbox" ]; then
+            cp README.md dist/DaybreakToolbox/README.md
+            python -c "import shutil; shutil.make_archive('${out}', 'zip', 'dist/DaybreakToolbox')"
+          else
+            cp README.md dist/README.md
+            python -c "import shutil; shutil.make_archive('${out}', 'zip', 'dist')"
+          fi
           ls -la "${out}.zip"
 
       - name: Build Inno Setup installer (Windows 安装程序)

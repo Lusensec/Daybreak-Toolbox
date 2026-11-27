@@ -1,6 +1,6 @@
 ; 破晓·工具箱 —— Windows 安装程序（Inno Setup 6.3+ / 7）
 ; 由 CI 构建：iscc /D:AppVersion=v2.0.9 /D:AppVerNum=2.0.9 /D:ExePath=dist\DaybreakToolbox.exe packaging\windows\setup.iss
-; 本地构建（可选）：先 pnpm build + PyInstaller 出 dist\DaybreakToolbox.exe，再 ISCC 本文件。
+; 本地构建（可选）：先 pnpm build + PyInstaller --onedir 出 dist\DaybreakToolbox\，再 ISCC 本文件。
 ;
 ; 设计要点：
 ;  - 默认安装到 %LOCALAPPDATA%\DaybreakToolbox（免管理员/UAC；程序会在 exe 旁写 config/ 与 daybreak.log，
@@ -10,7 +10,9 @@
 ; 版本常量来自 _defines.inc（CI 构建前覆盖写入当前 tag；本地构建直接改该文件）。
 ; 不用 iscc /D: 传参——实测 runner 上 /D: 参数未生效（脚本 #define 又覆盖命令行的双重怪癖）。
 #include "_defines.inc"
-#define ExePath    "..\..\dist\DaybreakToolbox.exe"  ; onefile 产物（相对 packaging/windows/）
+; v2.1.1：产物改为 onedir（dist\DaybreakToolbox\ 目录 + _internal\）——去掉每次启动的运行时
+; 自解压（onefile 每次双击都要解 394 文件/63MB 到 %TEMP%，实测占启动耗时 3s）
+#define DistDir    "..\..\dist\DaybreakToolbox"
 
 [Setup]
 AppId={{9C7D5E2A-4B1F-4C6E-8A3D-B2E7F05A1C48}}
@@ -43,7 +45,7 @@ Name: "chinesesimplified"; MessagesFile: "languages\ChineseSimplified.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式:"
 
 [Files]
-Source: "{#ExePath}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Daybreak Toolbox"; Filename: "{app}\DaybreakToolbox.exe"
