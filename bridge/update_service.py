@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.16"
+APP_VERSION = "2.0.17"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,16 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.17":
+"""
+Windows 安装/卸载界面中文化 + 修复下边框拉伸闪烁晃动：
+1、安装程序（win-setup.exe）向导与卸载对话框改为简体中文（Inno 官方中文语言文件入库，单一语言无选择页）
+2、修复下边框上压缩时的窗口闪烁晃动：
+  - 流式几何应用不再每帧 ShowWindow（消除 60fps 重绘闪动）
+  - WinForms 最小尺寸归一化（建窗时按主屏缩放设置的 MinimumSize 会在 100% 显示器上把窗口弹回 → 尺寸回跳，现按 100% 最差情形统一）
+  - 窗体背景色随主题同步（下边框压缩时 WebView2 渲染间隙露出的条带与页面同色，白闪不可见）
+  - 拖拽/拉伸流「至多一笔在途」背压（慢 RTT 下平滑合并而非成批追帧）
+""",
     "v2.0.16":
 """
 修复拖动主窗口延迟与左右晃动：

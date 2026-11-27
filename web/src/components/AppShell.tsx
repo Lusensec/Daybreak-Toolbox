@@ -112,6 +112,17 @@ export default function AppShell() {
   }
 
   /** 顶栏拖拽移动窗口：mousedown 取一次窗口基准 rect → mousemove rAF 节流 window.move（DIP 增量，逻辑像素一致） */
+  // v2.0.17：拖拽/拉伸流「至多一笔在途」背压——前一笔 window.move/set_rect 未 ACK 时本帧跳过
+  //（最新坐标由下一 rAF 携带）；RTT 快时无感，RTT 慢时平滑合并而非成批追帧（防队列堆积阶梯跳变）
+  const geoInFlight = useRef(0);
+  function sendGeo(cmd: "window.move" | "window.set_rect", payload: Record<string, unknown>) {
+    if (geoInFlight.current > 0) return;
+    geoInFlight.current += 1;
+    void sendCommand(cmd, payload).catch(() => {}).finally(() => {
+      geoInFlight.current -= 1;
+    });
+  }
+
   function onHeaderDragStart(e: React.MouseEvent) {
     if (!windowed || e.button !== 0 || !isHeaderDragTarget(e.target)) return;
     void (async () => {
@@ -130,7 +141,7 @@ export default function AppShell() {
           requestAnimationFrame(() => {
             queued = false;
             if (!d.active) return;
-            void sendCommand("window.move", { x: d.ox + (lx - d.sx), y: d.oy + (ly - d.sy) }).catch(() => {});
+            sendGeo("window.move", { x: d.ox + (lx - d.sx), y: d.oy + (ly - d.sy) });
           });
         };
         const onUp = () => {
@@ -206,7 +217,8 @@ export default function AppShell() {
               h = Math.max(EDGE_MIN_H, h);
               // 位置+大小一次原子提交（window.set_rect 单次 SetWindowPos）：
               // 旧版 左缘=move+resize 两步快连发会被 WinForms UI 线程吞一笔 → 卡顿/位置钉死
-              void sendCommand("window.set_rect", { x, y, width: w, height: h }).catch(() => {});
+              // v2.0.17：走 sendGeo（至多一笔在途背压，防慢 RTT 队列堆积成批追帧）
+              sendGeo("window.set_rect", { x, y, width: w, height: h });
             });
           };
           const onUp = () => {
@@ -231,6 +243,14 @@ export default function AppShell() {
       toast.err(`操作失败：${e instanceof Error ? e.message : e}`);
     }
   }
+
+  // v2.0.17：窗体背景色随主题同步（下边框拉伸时 WebView2 渲染间隙露出的条带与页面同色，
+  // 白闪不可见；颜色取自 theme/tokens.css 的 --bg）
+  useEffect(() => {
+    if (!windowed) return;
+    const rgb = isDark ? [0x1e, 0x1f, 0x24] : [0xf4, 0xf6, 0xf8];
+    void sendCommand("window.set_background", { r: rgb[0], g: rgb[1], b: rgb[2] }).catch(() => {});
+  }, [windowed, isDark]);
 
   // 路由切到固定功能页（非工具画布）时隐藏导航栏行（旧版：离开工具菜单后导航栏消失）
   useEffect(() => {

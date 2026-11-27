@@ -150,18 +150,21 @@ def test_maximize_target_mixed_dpi():
 
 def test_move_no_settle_is_fast(monkeypatch):
     """v2.0.16：连续 move（settle=False）不串行等 120ms —— 10 笔拖动流 <300ms 完成；
-    settle=True（最大化/还原等一次性状态变更）仍保留 120ms 落定。"""
+    settle=True（最大化/还原等一次性状态变更）仍保留 120ms 落定。
+    v2.0.17：流式路径不再调 ShowWindow（每帧 ShowWindow 强制重绘 → 拉伸闪烁）；
+    settle 路径保留 ShowWindow（清残留 showCmd）。"""
     import ctypes
     import time
     u32 = ctypes.windll.user32
     calls: list = []
+    show_calls: list = []
 
     def fake_swp(h, _none, x, y, w, hgt, _flags):
         calls.append((x, y, w, hgt))
         return 1
 
     monkeypatch.setattr(u32, "SetWindowPos", fake_swp)
-    monkeypatch.setattr(u32, "ShowWindow", lambda _h, _n: 1)
+    monkeypatch.setattr(u32, "ShowWindow", lambda h, n: show_calls.append((h, n)) or 1)
 
     class FakeW:
         class _N:
@@ -179,9 +182,19 @@ def test_move_no_settle_is_fast(monkeypatch):
     dt_fast = time.perf_counter() - t0
     assert len(calls) == 10, f"10 笔 SetWindowPos 应全部发出（无吞包），实际 {len(calls)}"
     assert dt_fast < 0.3, f"无落定 10 笔应 <0.3s（120ms 串行仍在？），实际 {dt_fast:.2f}s"
+    assert len(show_calls) == 0, "流式（settle=False）路径不应调 ShowWindow（每帧重绘→闪烁）"
 
     t1 = time.perf_counter()
     bmain._set_window_geometry_phys(w, 0, 0, 1600, 1000, settle=True)
     # 0.12s sleep 在 Windows 上可因计时器分辨率提前 ~1 tick 唤醒 → 阈值放宽到 0.08s
     # （仍能区分「有落定」与无落定的 <0.3s/10 笔 快路径）
     assert time.perf_counter() - t1 >= 0.08, "settle=True 路径应仍含 120ms 落定（≥0.08s 实测下限）"
+    assert len(show_calls) == 1, "settle=True 路径应保留 ShowWindow（清残留 showCmd）"
+
+
+def test_set_window_background_no_window():
+    """v2.0.17：window.set_background 无窗口守卫（服务形态/测试环境 → 不抛）。"""
+    r = bmain.set_window_background(30, 31, 36)
+    assert r.get("ok") is False and "error" in r
+    bad = bmain.set_window_background(300, 0, 0)
+    assert bad.get("ok") is False, "rgb 越界应拒绝"

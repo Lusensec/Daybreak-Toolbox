@@ -551,6 +551,9 @@ def _register_builtin_commands() -> None:
     async def _window_set_rect(p, _ws):
         return await asyncio.to_thread(set_window_rect, p.get("x", 0), p.get("y", 0), p.get("width", 960), p.get("height", 600))
 
+    async def _window_set_background(p, _ws):
+        return await asyncio.to_thread(set_window_background, int(p.get("r", 0)), int(p.get("g", 0)), int(p.get("b", 0)))
+
     _bus.register("app.env", _app_env)
     _bus.register("app.quit", _app_quit)
     _bus.register("window.get_rect", _window_get_rect)
@@ -559,6 +562,7 @@ def _register_builtin_commands() -> None:
     _bus.register("window.maximize", _window_maximize)
     _bus.register("window.minimize", _window_minimize)
     _bus.register("window.set_rect", _window_set_rect)
+    _bus.register("window.set_background", _window_set_background)
 
     # ---- SSH 终端（config/ssh_hosts.json 主机表 + 常驻 paramiko 会话；会话断开广播 ssh.closed）----
     def _ssh_call(fn, *a, **kw):
@@ -624,7 +628,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.16", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.17", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -997,7 +1001,8 @@ def _set_window_geometry_phys(w, px, py, pw, ph, keep_size: bool = False,
     - 两步跨线程 .NET Invoke 快速连发时，WinForms UI 线程未消化完上一笔 WM_MOVE/WM_SIZE，
       第二笔被丢弃/半应用（v2.0.10 冒烟实测：快连点还原不生效，慢速则正常）；
     - 后端 resize 内部读 Location 决定固定点，跨线程读到旧值会把窗口钉回错误位置。
-    串行锁保证原子性；ShowWindow(Normal) 清残留 showCmd。
+    串行锁保证原子性；ShowWindow(Normal) 清残留 showCmd（仅 settle=True 一次性路径——
+    流式路径 60fps 每笔 ShowWindow 会强制重绘触发闪烁，v2.0.17 移除）。
     keep_size=True 时忽略 pw/ph，保持窗口当前物理尺寸（move 用）。
     settle（v2.0.16）：120ms 落定延时 —— 仅「一次性状态变更」（最大化/还原/单条 resize）需要，
     给 WebView2 布局留消化时间；**连续拖拽流**（顶栏 move / 边缘 set_rect，60fps）置 False：
@@ -1012,8 +1017,8 @@ def _set_window_geometry_phys(w, px, py, pw, ph, keep_size: bool = False,
             cur = _get_window_phys(w)
             pw, ph = (cur[2], cur[3]) if cur else (int(pw), int(ph))
         user32.SetWindowPos(handle, None, int(px), int(py), int(pw), int(ph), 0x04 | 0x40 | 0x10)
-        user32.ShowWindow(handle, 1)  # SW_SHOWNORMAL：清残留 Maximized/Minimized 状态
         if settle:
+            user32.ShowWindow(handle, 1)  # SW_SHOWNORMAL：清残留 Maximized/Minimized 状态
             time.sleep(0.12)  # 让 UI 线程消化 WM_MOVE/WM_SIZE，下一笔才不会被吞
 
 
@@ -1148,33 +1153,153 @@ def minimize_window() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+# Win32 子类过程引用表（handle → 过程对象；必须持引用防 GC 回收，回收后回调野指针崩）
+_SUBCLASS_PROCS: "dict[int, object]" = {}
+# 子类回调（UI 线程）应用的 .NET 值：handle → {"bg": 预计算的 Color 对象, "min_applied": bool}
+# （.NET 值在 worker 线程预计算——静态 FromArgb 调用安全；属性写只能发生在 UI 线程，
+#  跨线程写 WinForms 属性即使关了检查也会死锁全进程，v2.0.17 实测）
+_SUBCLASS_NET_VALUES: "dict[int, dict]" = {}
+
+
 def _install_closing_hook() -> None:
-    """v2.0.15：拦截 WinForms Closing 事件（Alt+F4 / 系统级关窗）——「关闭后进入最小化」开启时
-    取消关闭并改为最小化（进程驻留托盘）；关闭时放行（旧语义：窗口销毁 → 退出进程）。
-    事件处理时读盘判定（设置即时生效，无需重启）；best-effort 安装（pythonnet 事件挂接
-    异常 → 打日志退回旧语义，不影响窗口本体）。"""
+    """v2.0.15/17：Win32 WndProc 替换统一处理：
+    - WM_CLOSE / WM_SYSCOMMAND(SC_CLOSE)：「关闭后进入最小化」开启 → 吞掉并最小化驻留托盘；
+      关闭 → 放行（旧语义：窗口销毁 → 退出进程）。事件时读盘判定（改设置即时生效）。
+    - WM_USER+100（wParam=0xRRGGBB）/ WM_USER+101：在 **UI 线程** 应用窗体 BackColor /
+      MinimumSize（worker 线程只 PostMessage 异步触发——跨线程直接写
+      WinForms 属性会死锁全进程，v2.0.17 冒烟实测：uvicorn accept 停摆、全线程 0 CPU）。
+    实现（v2.0.17 终版）：comctl32 SetWindowSubclass（需 exe 携带 comctl32 v6 manifest——
+    packaging/windows/app.manifest.xml 已嵌入 PyInstaller 构建；未接管消息经 DefSubclassProc
+    转发原生链）——不用 WinForms Closing 事件（pythonnet 构造/子类化 .NET 委托在 frozen
+    环境不可用，且跨线程写 WinForms 属性会死锁全进程——v2.0.17 冒烟实测）。
+    best-effort：失败仅记日志（关闭=退出 旧语义保持）。"""
     w = _active_window()
-    if w is None:
+    if w is None or sys.platform != "win32":
         return
     try:
-        form = w.native  # WinForms Form（仅 win32 后端有 .native；mac/linux 无此钩子——原生关闭行为正常）
-        from System.Windows import FormClosingEventHandler
+        import ctypes
+        from ctypes import wintypes
 
-        def _on_closing(sender, e):
+        comctl32 = ctypes.WinDLL("comctl32", use_last_error=True)
+        h = wintypes.HWND(_handle_int(w))
+        WM_CLOSE, WM_SYSCOMMAND, SC_CLOSE = 0x0010, 0x0112, 0xF050
+        WMU_BG, WMU_MINSIZE = 0x0400 + 100, 0x0400 + 101
+
+        # SetWindowSubclass 前置（Vista+ ICC_CLASSINIT；需 comctl32 v6 manifest——app.manifest.xml 已嵌入）
+        class _INITCOMMONCONTROLSEX(ctypes.Structure):
+            _fields_ = [("dwSize", ctypes.c_uint32), ("dwICC", ctypes.c_uint32)]
+
+        icc = _INITCOMMONCONTROLSEX()
+        icc.dwSize = ctypes.sizeof(_INITCOMMONCONTROLSEX)
+        icc.dwICC = 0x0080
+        comctl32.InitCommonControlsEx(ctypes.byref(icc))
+
+        hkey = _handle_int(w)
+
+        def _apply_bg(rgb: int):
+            """UI 线程回调内：应用 .NET BackColor（异常仅记日志，绝不跨线程 Invoke）。"""
             try:
-                from . import settings_service
-                if settings_service.get_all().get("close_to_tray") and _active_window() is not None:
-                    e.Cancel = True
-                    _active_window().minimize()
-                    print("[bridge] 系统关窗（Alt+F4）拦截：关闭后进入最小化已开启 → 驻留托盘")
+                wf = _wf_types()
+                if wf is None:
                     return
+                r, g, b = (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF
+                i32 = wf.Int32
+                form = _active_window().native if _active_window() else None
+                if form is None:
+                    return
+                form.BackColor = wf.Color.FromArgb(i32(r), i32(g), i32(b))
+                vals = _SUBCLASS_NET_VALUES.get(hkey)
+                if vals is not None and not vals.get("bg_logged"):
+                    vals["bg_logged"] = True
+                    print(f"[bridge] UI 线程应用 BackColor 完成 rgb=0x{r:02X}{g:02X}{b:02X}")
             except Exception as ex:
-                print(f"[bridge] closing hook 异常，放行关闭：{ex}")
+                print(f"[bridge] UI 线程应用 BackColor 失败（跳过）：{ex}")
 
-        form.Add_Closing(FormClosingEventHandler(None, _on_closing))
-        print("[bridge] 窗口关闭钩子已安装（Alt+F4 遵循「关闭后进入最小化」）")
+        def _apply_min_size():
+            """UI 线程回调内：MinimumSize 归一化（100% 屏最差情形 960×600 物理，防 WinForms 回跳）。"""
+            try:
+                vals = _SUBCLASS_NET_VALUES.get(hkey)
+                if not vals or vals.get("min_applied"):
+                    return
+                wf = _wf_types()
+                form = _active_window().native if _active_window() else None
+                if wf is None or form is None:
+                    return
+                i32 = wf.Int32
+                form.MinimumSize = wf.Size(i32(960), i32(600))
+                vals["min_applied"] = True
+                print("[bridge] WinForms 属性归一化完成（UI 线程：MinimumSize=960×600 物理）")
+            except Exception as ex:
+                print(f"[bridge] UI 线程应用 MinimumSize 失败（跳过）：{ex}")
+
+        def _proc(hwnd, msg, wparam, lparam):
+            try:
+                if msg == WM_CLOSE or (msg == WM_SYSCOMMAND and (wparam & 0xFFF0) == SC_CLOSE):
+                    from . import settings_service
+                    if settings_service.get_all().get("close_to_tray") and _active_window() is not None:
+                        _active_window().minimize()
+                        print("[bridge] 系统关窗拦截（Alt+F4/任务栏X）：关闭后进入最小化已开启 → 驻留托盘")
+                        return 0
+                elif msg == WMU_BG:
+                    _apply_bg(wparam & 0xFFFFFF)
+                    return 0
+                elif msg == WMU_MINSIZE:
+                    _apply_min_size()
+                    return 0
+            except Exception as ex:
+                print(f"[bridge] closing hook 异常，放行：{ex}")
+            # 未接管消息 → 转发 comctl32 原生链（DefSubclassProc 是子类化的正确转发器）
+            return comctl32.DefSubclassProc(hwnd, msg, wparam, lparam)
+
+        comctl32.DefSubclassProc.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        comctl32.DefSubclassProc.restype = ctypes.c_ssize_t
+
+        proc_ref = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
+                                      wintypes.WPARAM, wintypes.LPARAM)(_proc)
+        _SUBCLASS_PROCS[hkey] = proc_ref  # 持引用（防 GC 回收后回调野指针）
+        _SUBCLASS_NET_VALUES[hkey] = {"min_applied": False, "bg_logged": False}
+        comctl32.SetWindowSubclass.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32]
+        comctl32.SetWindowSubclass.restype = ctypes.c_int
+        ok = comctl32.SetWindowSubclass(h, proc_ref, 1, 0)
+        if not ok:
+            raise RuntimeError(f"SetWindowSubclass 失败 err={ctypes.get_last_error()}（需 comctl32 v6 + ICC_CLASSINIT）")
+        print("[bridge] 窗口关闭钩子安装成功（Win32 子类；Alt+F4/任务栏X 遵循「关闭后进入最小化」）")
     except Exception as e:
         print(f"[bridge] 窗口关闭钩子安装失败（关闭=退出 旧语义保持）：{e}")
+
+
+def _post_winforms_normalize(w) -> None:
+    """v2.0.17：向子类（UI 线程）投递归一化消息：默认主题背景色 + MinimumSize 960×600 物理。
+    PostMessage 异步、不阻塞；子类未安装（钩子失败）时直接跳过——B3 回跳已被证明
+    （Win32 直接 SetWindowPos 绕过 WinForms 约束路径）无需该归一化，跳过不劣于现状。"""
+    h = _handle_int(w)
+    if h not in _SUBCLASS_PROCS:
+        print("[bridge] 子类未安装，跳过 WinForms 归一化（保持现状）")
+        return
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    user32.PostMessageW(wintypes.HWND(h), 0x0400 + 100, 0x1E1F24, 0)  # 默认主题 dark bg
+    user32.PostMessageW(wintypes.HWND(h), 0x0400 + 101, 0, 0)
+
+
+def set_window_background(r, g, b) -> dict:
+    """v2.0.17：web 端主题解析后同步窗体背景色。worker 线程只 PostMessage，
+    .NET 属性写由 UI 线程子类回调执行（跨线程直写会死锁全进程——冒烟实测）。"""
+    w = _active_window()
+    if w is None:
+        return {"ok": False, "error": "window unavailable"}
+    if not (0 <= int(r) <= 255 and 0 <= int(g) <= 255 and 0 <= int(b) <= 255):
+        return {"ok": False, "error": "rgb out of range"}
+    h = _handle_int(w)
+    if h not in _SUBCLASS_PROCS:
+        return {"ok": False, "error": "subclass not installed (hook failed at startup)"}
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    user32.PostMessageW(wintypes.HWND(h), 0x0400 + 100,
+                         (int(r) << 16) | (int(g) << 8) | int(b), 0)
+    return {"ok": True, "rgb": [int(r), int(g), int(b)], "applied": "async(ui-thread)"}
 
 
 def _restore_window() -> bool:
@@ -1196,6 +1321,36 @@ def _restore_window() -> bool:
     except Exception as e:
         print(f"[bridge] 窗口唤回失败：{e}")
         return False
+
+
+def _wf_types():
+    """v2.0.17：pywebview winforms 后端的 .NET 类型对象（Color/Size/Int32/Control）。
+    统一从此处取（不写 `from System... import`——frozen 环境 pythonnet 导入钩子可能未激活）；
+    不可用（非 win32/未建窗）→ None。"""
+    try:
+        import webview.platforms.winforms as _wf
+        return _wf
+    except Exception:
+        return None
+
+
+def _install_window_hooks_once() -> None:
+    """v2.0.17：后台轮询等 pywebview 构建完窗体（w.native 非空——它在 webview.start() 建
+    Form 时才赋值，create_window 后立刻装钩子会拿到 None）→ 安装 Closing 钩子 + WinForms
+    属性归一化。超时 30s 放弃（退回旧语义，不影响窗口本体）。"""
+    import time
+
+    def _worker() -> None:
+        for _ in range(60):
+            w = _active_window()
+            if w is not None and getattr(w, "native", None) is not None:
+                _install_closing_hook()
+                _post_winforms_normalize(w)  # 钩子成功才投递；失败则保持现状（不劣于无归一化）
+                return
+            time.sleep(0.5)
+        print("[bridge] 窗体 native 未就绪（放弃 关闭钩子/WinForms 归一化，行为退回旧语义）")
+
+    _threading.Thread(target=_worker, daemon=True, name="win-hooks").start()
 
 
 def resolve_close_action(close_to_tray: bool, has_window: bool) -> str:
@@ -1273,7 +1428,7 @@ def run_windowed(port: Optional[int] = None) -> None:
         webview.create_window("破晓·工具箱", url, width=1280, height=800,
                               resizable=True, min_size=(960, 600), frameless=True)
         _perf("windowed.window_created")
-        _install_closing_hook()  # v2.0.15：Alt+F4 遵循「关闭后进入最小化」
+        _install_window_hooks_once()  # v2.0.17：后台等窗体就绪 → Alt+F4 钩子 + WinForms 属性归一化
         webview.start()  # 阻塞：主线程窗口消息循环；窗口关闭后返回
     except Exception as e:
         print(f"[bridge] 窗口模式不可用（{type(e).__name__}: {e}）；降级服务模式，用默认浏览器打开界面")

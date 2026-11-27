@@ -118,6 +118,12 @@ jobs:
           if [ -n "${{ matrix.icon }}" ]; then
             icon_flag="--icon ${{ matrix.icon }}"
           fi
+          # v2.0.17：Windows 构建嵌入 comctl32 v6 manifest（关闭钩子 SetWindowSubclass 依赖；
+          # 非 Windows 平台跳过——manifest 仅对 Windows 有意义）
+          manifest_flag=""
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            manifest_flag="--manifest packaging/windows/app.manifest.xml"
+          fi
           pyinstaller --name DaybreakToolbox --clean --noconfirm \
             --exclude-module keyring \
             --exclude-module transformers --exclude-module torch \
@@ -127,6 +133,7 @@ jobs:
             --add-data "web/dist${sep}dist" --add-data "config${sep}config" \
             $extra_flags \
             $icon_flag \
+            $manifest_flag \
             ${{ matrix.pyinstaller }} run_bridge.py
           echo "build done: $(ls dist | head -5 | tr '\n' ' ')"
 

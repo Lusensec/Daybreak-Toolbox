@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- 破晓·工具箱 Windows 版 PyInstaller 最小 manifest（v2.0.17）：
+     仅声明 comctl32 v6 依赖（SetWindowSubclass 等 Vista+ 特性；无 v6 时系统回退 v5，
+     comctl32.SetWindowSubclass 静默失败 —— v2.0.17 冒烟实测）。
+     刻意不含 dpiAwareness / compatibility / trustInfo：保持与 v2.0.16 及以前完全一致的
+     系统默认（.NET Framework system-DPI-aware + asInvoker，无 UAC），避免改变既有行为。
+     XML 注释内不可出现双连字符。 -->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="DaybreakToolbox" type="win32"/>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="neutral"/>
+    </dependentAssembly>
+  </dependency>
+</assembly>

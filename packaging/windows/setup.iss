@@ -24,7 +24,7 @@ OutputDir=out
 OutputBaseFilename=Daybreak-Toolbox-{#AppVersion}-win-setup
 SetupIconFile=..\daybreak_logo.ico
 UninstallDisplayIcon={app}\DaybreakToolbox.exe
-UninstallDisplayName=Daybreak Toolbox
+UninstallDisplayName=破晓·工具箱
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -35,10 +35,12 @@ VersionInfoVersion={#AppVerNum}
 VersionInfoProductName=Daybreak Toolbox
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
+; v2.0.17：简体中文界面（安装向导 + 卸载对话框；官方翻译文件，Inno 6.5+，已入库 languages/）
+; 单一语言 → 无语言选择页；卸载器由本 .iss 生成故同步中文化
+Name: "chinesesimplified"; MessagesFile: "languages\ChineseSimplified.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Shortcuts:"
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式:"
 
 [Files]
 Source: "{#ExePath}"; DestDir: "{app}"; Flags: ignoreversion
@@ -49,10 +51,12 @@ Name: "{group}\Daybreak Toolbox"; Filename: "{app}\DaybreakToolbox.exe"
 Name: "{autodesktop}\Daybreak Toolbox"; Filename: "{app}\DaybreakToolbox.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\DaybreakToolbox.exe"; Description: "Run Daybreak Toolbox now"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\DaybreakToolbox.exe"; Description: "现在运行 破晓·工具箱"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; 有意不自动清理 config/ 与 daybreak.log（用户数据：菜单/工具配置）——卸载后保留在安装目录，可手动删除
 
 [Messages]
-SetupAppTitle=Daybreak Toolbox {#AppVersion} Setup
+; 中文化覆盖（官方 .isl 已翻译全部标准串；此处仅覆盖应用名相关标题——键必须为 Inno 标准消息 ID）
+SetupAppTitle=破晓·工具箱 {#AppVersion} 安装向导
+UninstallAppTitle=破晓·工具箱 卸载向导
