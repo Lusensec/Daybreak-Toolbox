@@ -182,4 +182,6 @@ def test_move_no_settle_is_fast(monkeypatch):
 
     t1 = time.perf_counter()
     bmain._set_window_geometry_phys(w, 0, 0, 1600, 1000, settle=True)
-    assert time.perf_counter() - t1 >= 0.12, "settle=True 路径应仍含 120ms 落定"
+    # 0.12s sleep 在 Windows 上可因计时器分辨率提前 ~1 tick 唤醒 → 阈值放宽到 0.08s
+    # （仍能区分「有落定」与无落定的 <0.3s/10 笔 快路径）
+    assert time.perf_counter() - t1 >= 0.08, "settle=True 路径应仍含 120ms 落定（≥0.08s 实测下限）"
