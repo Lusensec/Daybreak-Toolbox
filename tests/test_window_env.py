@@ -31,7 +31,7 @@ def test_app_env_includes_version():
     from bridge.update_service import APP_VERSION
     env = bmain.get_app_env()
     assert env["version"] == APP_VERSION
-    assert APP_VERSION == "2.0.18"  # 锚定单一来源常量值（随当前发行版本更新）
+    assert APP_VERSION == "2.1.0"  # 锚定单一来源常量值（随当前发行版本更新）
 
 
 def test_window_rect_no_window_returns_none():
@@ -205,12 +205,10 @@ def test_move_no_settle_is_fast(monkeypatch):
     assert calls[-1][4] == 0x54, "settle=True 路径 SetWindowPos 保留 SWP_SHOWWINDOW（0x04|0x40|0x10，清残留 showCmd 双保险）"
 
 
-def test_set_window_rect_noop_when_size_unchanged(monkeypatch):
-    """v2.0.18：set_rect 流式路径（settle=False）目标物理尺寸与当前物理尺寸一致 → no-op，
-    不触 SetWindowPos（防拖拽流无变化空帧重入 Win32）；尺寸变化 → 正常原子提交。
-    位置不入 no-op 判定：_logical_to_physical 对 x/y 的换算值与物理读回的 cur[0]/cur[1]
-    在恒等（100% 屏）下严格相等；混合 DPI 下按尺寸判据已覆盖「无尺寸变化的空帧」这一
-    主要空转来源（位置抖动在 60fps 流里每帧必变，no-op 判定意义有限）。"""
+def test_set_window_rect_noop_only_when_geometry_identical(monkeypatch):
+    """v2.0.20：set_rect 流式路径只有「几何完全一致」才 no-op（防拖拽空帧重入 Win32）。
+    v2.0.18 判据只看尺寸——固定尺寸模式下尺寸恒等，会把纯位置移动永远判成 no-op
+    （窗口拖不动），因此位置也必须参与比较。"""
     import sys
     import ctypes
     if sys.platform != "win32":
@@ -234,18 +232,19 @@ def test_set_window_rect_noop_when_size_unchanged(monkeypatch):
     monkeypatch.setattr(u32, "SetWindowPos", fake_swp)
 
     r1 = bmain.set_window_rect(0, 0, 1280, 800)
-    assert r1["ok"] is True and r1.get("noop") is True, f"同尺寸应 no-op，实际 {r1}"
+    assert r1["ok"] is True and r1.get("noop") is True, f"几何一致应 no-op，实际 {r1}"
     assert calls == [], "no-op 路径不应触 SetWindowPos"
 
-    # 同尺寸不同 x（位置变化）：位置不入 no-op 判定（cur[2]==pw 仍成立）→ 仍 no-op（见 docstring）
+    # 同尺寸不同 x（纯位置移动）：必须真正提交，否则固定尺寸的窗口永远拖不动
     r1b = bmain.set_window_rect(5, 0, 1280, 800)
-    assert r1b.get("noop") is True and calls == [], "同尺寸位置变化应仍 no-op"
+    assert r1b["ok"] is True and not r1b.get("noop"), f"位置变化不应被判为 no-op，实际 {r1b}"
+    assert calls == [(5, 0, 1280, 800)], f"位置变化应恰好一笔 SetWindowPos，实际 {calls}"
 
-    # 尺寸变化（目标 1400 vs 当前 1280）：no-op 判据 cur[2]==pw 不成立 → 恰好一笔原子提交
+    # 尺寸变化（目标 1400 vs 当前 1280）→ 正常原子提交
     monkeypatch.setattr(bmain, "_active_window", lambda: FakeW())
     r2 = bmain.set_window_rect(0, 0, 1400, 800)
     assert r2["ok"] is True and not r2.get("noop"), f"尺寸变化应提交，实际 {r2}"
-    assert calls == [(0, 0, 1400, 800)], f"应恰好一笔 SetWindowPos（物理 1400×800），实际 {calls}"
+    assert calls == [(5, 0, 1280, 800), (0, 0, 1400, 800)], f"应逐笔提交，实际 {calls}"
 
 
 def test_set_window_rect_no_window_guard(monkeypatch):
@@ -294,94 +293,99 @@ def test_set_window_background_no_window():
     assert bad.get("ok") is False, "rgb 越界应拒绝"
 
 
-# ---- v2.0.18：tl/tr 斜向拉伸几何（前端 EdgeZone 客户端镜像的纯函数对拍）----
-# 对拍目标：web/src/components/AppShell.tsx onEdgeResizeStart（L210-L229，v2.0.18 已评审 PASS）。
-# 以下 4 个用例门禁的是 Python 侧镜像公式（_edge_geometry）的回归钉——不 import TS，无新代码也绿
-# （有意设计：前端公式由评审 + 本镜像钉双保险）；对照断言由 test_edge_zone_invariance_vs_orthogonal_edges
-# 承担（「角落 = 正交边缘合成」，与 left/right/bl/br 既有语义自洽）。
-# 前端 AppShell.onEdgeResizeStart 的公式（与后端 _clamp_window_size 同源钳制；lead 复核 v2.0.18 修正底缘锚定）：
-#   tl：w=max(MIN, ow-dx), x=ox+(ow-w); h=max(MIN, oh-dy), y=oy+(oh-h)  （右下锚定：右缘+底缘固定）
-#   tr：w=max(MIN, ow+dx), x=ox;        h=max(MIN, oh-dy), y=oy+(oh-h)  （左下锚定：左缘+底缘固定）
-#   （未触发最小高钳制时 y=oy+(oh-h) 恒等于 y=oy+dy，行为不变）
-_EDGE_MIN_W, _EDGE_MIN_H = 960, 600
+# ---- v2.0.20：窗口尺寸固定（主屏工作区 80%，不可拖拽拉伸）----
+# 前端 AppShell 的 onEdgeResizeStart / edgeRect 已随「禁止拉伸」移除，
+# 原 v2.0.18 的 _edge_geometry 镜像对拍用例一并退役（公式已不存在，保留会误导）。
+
+def test_fixed_window_geometry_ratio_and_center(monkeypatch):
+    """固定几何 = 主屏工作区 80% 且居中（逻辑像素；1080p + 40px 任务栏 → 1536×832）。"""
+    mons = [{"mon": (0, 0, 1920, 1080), "work": (0, 0, 1920, 1040), "primary": True, "scale": 1.0}]
+    monkeypatch.setattr(bmain, "_monitor_info_safe", lambda: mons)
+    assert bmain._fixed_window_geometry() == (192, 104, 1536, 832)
 
 
-def _edge_geometry(zone, ox, oy, ow, oh, dx, dy):
-    """镜像 web/src/components/AppShell.tsx onMove 的 zone→几何公式（纯函数，可测）。
-    tl：宽随左缘右移缩小（w=max(MIN,ow-dx), x=ox+(ow-w)），高随顶缘下移缩小（h=oh-dy），
-    右下锚定（右缘+底缘固定）。tr：宽随右缘右移增大（w=ow+dx, x=ox），高随顶缘下移缩小，
-    左下锚定（左缘+底缘固定）。最小高钳制后 y 按钳后 h 重锚底缘：y=oy+(oh-h)
-    （lead 复核 v2.0.18：与 left 边 x=ox+(ow-w) 右缘锚定对称；未钳制时 y=oy+dy 不变）。"""
-    w, h, x, y = ow, oh, ox, oy
-    if zone in ("right", "br"):
-        w = ow + dx
-    if zone in ("bottom", "bl"):
-        h = oh + dy
-    if zone in ("left", "bl", "tl"):
-        w = max(_EDGE_MIN_W, ow - dx)
-        x = ox + (ow - w)
-    if zone == "tr":
-        w = ow + dx
-    if zone in ("tl", "tr"):
-        h = oh - dy
-        y = oy + dy
-    wf = max(_EDGE_MIN_W, w)
-    hf = max(_EDGE_MIN_H, h)
-    if zone in ("tl", "tr"):
-        y = oy + (oh - hf)  # 底缘锚定：最小高钳制触发后顶缘重锚（未钳制时恒等于 oy+dy）
-    return {"x": x, "y": y, "width": wf, "height": hf}
+def test_fixed_window_geometry_hi_dpi(monkeypatch):
+    """150% 缩放：工作区物理 2880×1560 ÷1.5 → 逻辑 1920×1040，80% 仍为 1536×832（DPI 不放大窗口）。"""
+    mons = [{"mon": (0, 0, 2880, 1620), "work": (0, 0, 2880, 1560), "primary": True, "scale": 1.5}]
+    monkeypatch.setattr(bmain, "_monitor_info_safe", lambda: mons)
+    assert bmain._fixed_window_geometry() == (192, 104, 1536, 832)
 
 
-def test_edge_tl_geometry():
-    """左上角拉伸（tl：右下固定——右缘+底缘不动）：右移 dx / 下移 dy → 宽缩小、高缩小、左上角右移下移。"""
-    g = _edge_geometry("tl", 100, 100, 1400, 900, 40, 30)
-    assert g == {"x": 140, "y": 130, "width": 1360, "height": 870}
-    # 左缘继续右移越过最小宽 → 钳制 960，x 停在 ox+(ow-960)=100+440=540（钳制后停止漂移）
-    g = _edge_geometry("tl", 100, 100, 1400, 900, 460, 30)
-    assert g["width"] == 960 and g["x"] == 540
-    # 底缘锚定（lead 复核 v2.0.18）：顶缘下移越过最小高 → 钳制 600，顶缘 y 重锚 oy+(oh-600)=400
-    #（底缘停在 oy+oh=1000，不再随光标下滑；旧缺陷 y=oy+dy=430）
-    g = _edge_geometry("tl", 100, 100, 1400, 900, 40, 330)
-    assert g["height"] == 600 and g["y"] == 400
+def test_fixed_window_geometry_fallback(monkeypatch):
+    """显示器枚举失败：回退 1280×800（≈1600×1000 屏的 80%），不留 0 尺寸。"""
+    monkeypatch.setattr(bmain, "_monitor_info_safe", lambda: [])
+    assert bmain._fixed_window_geometry() == (0, 0, 1280, 800)
 
 
-def test_edge_tr_geometry():
-    """右上角拉伸（tr：左下固定——左缘+底缘不动）：右移 dx → 宽增大；下移 dy → 高缩小、上缘下移。"""
-    g = _edge_geometry("tr", 100, 100, 1400, 900, 40, 30)
-    assert g == {"x": 100, "y": 130, "width": 1440, "height": 870}
-    # 反向拖动（dx 为负 / dy 为负 = 向左/向上拖）：宽/高被最小值钳制，左下锚点固定
-    #（底缘锚定：顶缘 y 重锚 oy+(oh-600)=400；旧缺陷 y=oy+dy=430）
-    g = _edge_geometry("tr", 100, 100, 1400, 900, -500, 330)
-    assert g == {"x": 100, "y": 400, "width": 960, "height": 600}
+def test_clamp_window_size_fixed_mode(monkeypatch):
+    """固定尺寸模式：任何入参都返回固定值（resize / set_rect 无法改变窗口尺寸）。"""
+    monkeypatch.setattr(bmain, "_FIXED_WINDOW_SIZE", (1536, 832))
+    assert bmain._clamp_window_size(500, 300) == (1536, 832)
+    assert bmain._clamp_window_size(3000, 2000) == (1536, 832)
 
 
-def test_edge_corner_bottom_anchor_boundary():
-    """lead 复核 v2.0.18：tl/tr 最小高钳制边界用例——dx=0、dy 使 oh-dy < 600 →
-    h=600 且 y=oy+(oh-600)（底缘锚定；而非 y=oy+dy 把整个窗口带下滑）；
-    未触边界（dy 小）时 y=oy+dy 保持旧行为。"""
-    # tl（右下固定：底缘 oy+oh=1000、右缘 ox+ow=1500 不动）
-    g = _edge_geometry("tl", 100, 100, 1400, 900, 0, 310)
-    assert g == {"x": 100, "y": 400, "width": 1400, "height": 600}
-    # tr 对称（左下固定：左缘 x=ox=100 不动）
-    g = _edge_geometry("tr", 100, 100, 1400, 900, 0, 310)
-    assert g == {"x": 100, "y": 400, "width": 1400, "height": 600}
-    # 未触最小高：顶缘 y=oy+dy，与旧公式一致（钳制未触发 → 无行为变化）
-    assert _edge_geometry("tl", 100, 100, 1400, 900, 0, 100) == {"x": 100, "y": 200, "width": 1400, "height": 800}
-    assert _edge_geometry("tr", 100, 100, 1400, 900, 0, 100) == {"x": 100, "y": 200, "width": 1400, "height": 800}
+def test_fixed_window_size_none_keeps_legacy_clamp(monkeypatch):
+    """未初始化（服务形态 / 单测）：保持 v2.0.19 的最小尺寸钳制语义。"""
+    monkeypatch.setattr(bmain, "_FIXED_WINDOW_SIZE", None)
+    assert bmain._clamp_window_size(500, 300) == (960, 600)
+    assert bmain._clamp_window_size(1400, 900) == (1400, 900)
 
 
-def test_edge_zone_invariance_vs_orthogonal_edges():
-    """斜角区 = 同侧两条正交边缘组合（tl = left + 顶缘分量，tr = right + 顶缘分量），
-    与逐边公式结果一致——保证「角落=边缘合成」的不变量（与 left/right/bl/br 既有语义自洽）。
-    顶缘分量为 h=max(MIN, oh-dy)（顶缘下移变矮，与 bottom 的 oh+dy 符号相反）。"""
-    for ox, oy, ow, oh, dx, dy in [(100, 100, 1400, 900, 40, 30),
-                                   (0, 0, 960, 600, -200, -200),  # 已贴最小值的反向拖
-                                   (0, 0, 960, 600, 0, 330)]:     # 顶缘下移越过最小高
-        for zone in ("tl", "tr"):
-            g = _edge_geometry(zone, ox, oy, ow, oh, dx, dy)
-            # 宽分量与 left/right 正缘同公式（tr：dx>0 同 right 变宽，dx<0 被最小宽钳制）
-            ref_w = _edge_geometry("left" if zone == "tl" else "right", ox, oy, ow, oh, dx, 0)["width"]
-            # 高分量 = 顶缘分量（与 bottom 区符号相反）
-            ref_h = max(_EDGE_MIN_H, oh - dy)
-            assert g["width"] == ref_w, (zone, g, ref_w)
-            assert g["height"] == ref_h, (zone, g, ref_h)
+# ---- v2.0.19：拖拽重绘挂起 / 钩子兜底 / 背景色兜底（纯逻辑门禁）----
+
+def test_hwnd_key_int_and_c_void_p(monkeypatch):
+    """ctypes 回调 hwnd 可能是 int 或 c_void_p，统一取整数键（转发器查表用）。"""
+    import ctypes
+    assert bmain._hwnd_key(12345) == 12345
+    assert bmain._hwnd_key(ctypes.c_void_p(0x1E240)) == 0x1E240
+    assert bmain._hwnd_key(None) == 0
+
+
+def test_colorref_byte_order():
+    """0xRRGGBB → COLORREF 0x00BBGGRR（低字节在前），GCLP_HBRBACKGROUND 兜底钉字节序。"""
+    assert bmain._colorref(0x1E1F24) == 0x241F1E
+    assert bmain._colorref(0xF4F6F8) == 0xF8F6F4
+    assert bmain._colorref(0x000000) == 0
+    assert bmain._colorref(0xFFFFFF) == 0xFFFFFF
+
+
+def test_drag_begin_end_no_window_guard():
+    """无窗口（服务形态/测试环境）：drag_begin 返回结构化错误，drag_end no-op 不抛。"""
+    monkeypatch_target = bmain._active_window
+    bmain._active_window = lambda: None
+    try:
+        r = bmain.drag_begin()
+        assert r.get("ok") is False and "error" in r
+        e = bmain.drag_end()
+        assert e.get("ok") is True and e.get("noop") is True
+    finally:
+        bmain._active_window = monkeypatch_target
+
+
+def test_apply_class_background_non_win32_guard(monkeypatch):
+    """非 win32 平台：背景色兜底返回结构化错误（不抛、不误调 GDI）。"""
+    monkeypatch.setattr(bmain.sys, "platform", "linux")
+    try:
+        r = bmain._apply_class_background(1, 0x1E1F24)
+        assert r.get("ok") is False and r.get("error") == "win32 only"
+    finally:
+        monkeypatch.undo()
+
+
+def test_set_window_background_subclass_missing_falls_back(monkeypatch):
+    """钩子未装（_SUBCLASS_PROCS 空）：set_window_background 走 GCLP 兜底而非报「subclass not installed」。"""
+    called: list = []
+    fake_win = type("_W", (), {"native": None})()
+    monkeypatch.setattr(bmain, "_active_window", lambda: fake_win)
+    monkeypatch.setattr(bmain, "_handle_int", lambda _w: 999)
+    monkeypatch.setattr(bmain, "_SUBCLASS_PROCS", {}, raising=False)
+    monkeypatch.setattr(bmain, "_apply_class_background", lambda h, rgb: called.append((h, rgb)) or {"ok": True, "applied": "class-brush"})
+    r = bmain.set_window_background(30, 31, 36)
+    assert called == [(999, 0x1E1F24)], (called, r)
+    assert r.get("ok") is True and r.get("applied") == "class-brush"
+
+
+def test_drag_redraw_state_defaults():
+    """拖拽重绘状态默认未激活（进程启动 / 无拖拽时）。"""
+    assert bmain._DRAG_REDRAW["active"] is False
+    assert bmain._DRAG_REDRAW["hwnd"] == 0

@@ -34,12 +34,40 @@
   border-radius: 8px;
   flex: 0 0 auto;
   object-fit: cover;
+  -webkit-user-drag: none;   /* v2.0.20：禁止原生图片拖拽（否则拖 logo 会吞掉 mouseup） */
+  user-select: none;
 }
 .menu-title { font-size: 14px; font-weight: bold; color: var(--text); }
-/* 品牌区文字列（v2.0.18）：标题与版本号上下堆叠（版本号在「破晓·工具箱」正下方，用户验收要求） */
-.menu-brand__text { display: flex; flex-direction: column; gap: 2px; }
-/* 品牌区版本号（v2.0.18）：小字号次级文字色（--muted），浅深主题均由 token 协调 */
-.menu-brand__version { font-size: 11px; color: var(--muted); font-weight: 400; letter-spacing: 0.2px; }
+/* 品牌区文字列（v2.0.18）：标题与「版本号 + 连接状态」上下堆叠 */
+.menu-brand__text { display: flex; flex-direction: column; gap: 3px; }
+/* 第二行：版本号胶囊 + 连接状态（v2.0.20，由底部状态栏迁移而来） */
+.menu-brand__meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* 版本号：椭圆形（胶囊）单色底 + 同色系文字，避免纯文字贴边发灰 */
+.menu-brand__version {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-lo);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  line-height: 1.5;
+}
+/* 连接状态：在线绿 / 离线红 / 其余中性色；小字 + 图标，紧邻版本号右侧 */
+.menu-brand__conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  min-width: 52px;   /* 状态文案「连接中/已连接」长度不同，锁最小宽避免顶栏菜单左右抖动 */
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.menu-brand__conn[data-state="online"] { color: var(--success); }
+.menu-brand__conn[data-state="offline"] { color: var(--error); }
 
 .menu-nav {
   display: flex;
@@ -234,45 +262,7 @@
   background: #d13438;          /* Windows 标题栏关闭按钮同款红 */
   border-color: #d13438;
 }
-/* 全边缘拉伸区（v2.0.10）：左/右/下缘 6px 隐形热区 + 左下/右下角 14px（细斜纹视觉提示）
-   顶缘不做（顶栏是拖移区）；z-index 3500 < 模态层 4000+ → 打开弹窗时边缘自然不可拉伸 */
-.win-edge {
-  position: fixed;
-  z-index: 3500;
-  pointer-events: auto;
-  user-select: none;
-}
-/* 左上/右上角斜拉区（v2.0.18）：14×14 方形，紧贴顶栏（48px 高拖移区）正下方的左/右角落；
-   与下缘 bl/br 同构（角落 14×14 叠压同侧 6px 边缘热区，角落 div DOM 后渲染胜出）。
-   光标：tl=nesw-resize（左上角、右下角固定）、tr=nwse-resize（右上角、左下角固定）；
-   hover 斜纹渐变参照下缘角落（静态 --border 条纹 / hover --accent 条纹）镜像：tl 同 bl(45deg)、tr 同 br(225deg) */
-.win-edge--tl,
-.win-edge--tr {
-  top: 48px;
-  width: 14px; height: 14px;
-}
-.win-edge--tl { left: 0; cursor: nesw-resize; }
-.win-edge--tr { right: 0; cursor: nwse-resize; }
-.win-edge--tl:hover { background: linear-gradient(45deg, transparent 0 50%, var(--accent) 50% 58%, transparent 58% 74%, var(--accent) 74% 82%, transparent 82%); opacity: 0.9; }
-.win-edge--tr:hover { background: linear-gradient(225deg, transparent 0 50%, var(--accent) 50% 58%, transparent 58% 74%, var(--accent) 74% 82%, transparent 82%); opacity: 0.9; }
-.win-edge--left   { left: 0; top: 48px; bottom: 0; width: 6px; cursor: ew-resize; }
-.win-edge--right  { right: 0; top: 48px; bottom: 0; width: 6px; cursor: ew-resize; }
-.win-edge--bottom { left: 14px; right: 14px; bottom: 0; height: 6px; cursor: ns-resize; }
-.win-edge--bl,
-.win-edge--br {
-  width: 14px; height: 14px;
-  bottom: 0;
-  cursor: nwse-resize;
-}
-.win-edge--bl { left: 0; }
-.win-edge--br {
-  right: 0;
-  background:
-    linear-gradient(135deg, transparent 0 50%, var(--border) 50% 58%, transparent 58% 74%, var(--border) 74% 82%, transparent 82%);
-  opacity: 0.9;
-}
-.win-edge--br:hover { background: linear-gradient(135deg, transparent 0 50%, var(--accent) 50% 58%, transparent 58% 74%, var(--accent) 74% 82%, transparent 82%); }
-.win-edge--bl:hover { background: linear-gradient(45deg, transparent 0 50%, var(--accent) 50% 58%, transparent 58% 74%, var(--accent) 74% 82%, transparent 82%); opacity: 0.9; }
+/* v2.0.20：窗口尺寸固定为主屏工作区 80%，全边缘/角落拉伸手柄（.win-edge-*）样式已移除 */
 
 /* ---- 主内容区 ---- */
 .content {
@@ -281,18 +271,7 @@
   padding: 16px;
 }
 
-/* ---- 底部状态栏 ---- */
-.status-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  height: 28px; flex: 0 0 auto;
-  padding: 0 16px;
-  background: var(--border);
-  font-size: 12px;
-}
-.status-text { color: var(--muted); }
-.status-badge { font-weight: 600; }
-.status-badge[data-state="offline"] { color: var(--error); }
-.status-badge[data-state="online"] { color: var(--success); }
+/* v2.0.20：底部状态栏已移除（连接状态迁至顶栏品牌区版本号右侧，见 .menu-brand__conn） */
 
 /* 通用卡片（面板容器） */
 .card {

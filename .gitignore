@@ -37,4 +37,9 @@ packaging/out/
 # 本地 Release 打包产物
 packaging/*.zip
 Daybreak-Toolbox-*.zip
+Daybreak-Toolbox-*.exe
 daybreak.log
+
+# 本地调试截图 / Agent 工作目录（不随仓库分发）
+smoke_*.png
+.workbuddy/

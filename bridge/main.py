@@ -554,6 +554,12 @@ def _register_builtin_commands() -> None:
     async def _window_set_background(p, _ws):
         return await asyncio.to_thread(set_window_background, int(p.get("r", 0)), int(p.get("g", 0)), int(p.get("b", 0)))
 
+    async def _window_drag_begin(_p, _ws):
+        return await asyncio.to_thread(drag_begin)
+
+    async def _window_drag_end(_p, _ws):
+        return await asyncio.to_thread(drag_end)
+
     _bus.register("app.env", _app_env)
     _bus.register("app.quit", _app_quit)
     _bus.register("window.get_rect", _window_get_rect)
@@ -563,6 +569,8 @@ def _register_builtin_commands() -> None:
     _bus.register("window.minimize", _window_minimize)
     _bus.register("window.set_rect", _window_set_rect)
     _bus.register("window.set_background", _window_set_background)
+    _bus.register("window.drag_begin", _window_drag_begin)
+    _bus.register("window.drag_end", _window_drag_end)
 
     # ---- SSH 终端（config/ssh_hosts.json 主机表 + 常驻 paramiko 会话；会话断开广播 ssh.closed）----
     def _ssh_call(fn, *a, **kw):
@@ -628,7 +636,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.18", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.1.0", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -753,6 +761,11 @@ def pick_mode(argv: "list[str]") -> str:
 # （WinForms 后端内部乘窗口 DPI scale）；web 端 e.screenX/screenY 同为 DIP，增量直接可用。
 _WINDOWED_UI = False  # 模块标志：run_windowed 创建窗口前置 True；app.env 命令返回
 _WINDOW_MIN_W, _WINDOW_MIN_H = 960, 600  # 与 run_windowed 的 min_size 同源
+# v2.0.20：窗口尺寸固定为主屏工作区的 80%（用户要求：不可拖拽拉伸，仅保留 最大化/还原）。
+# _FIXED_WINDOW_SIZE 由 run_windowed 启动时写入（逻辑像素），此后所有 resize/set_rect 都钳到该值。
+_WINDOW_SIZE_RATIO = 0.8
+_FIXED_WINDOW_SIZE: "tuple[int, int] | None" = None
+
 
 
 def get_app_env() -> dict:
@@ -805,7 +818,12 @@ def move_window(x: int, y: int) -> dict:
 
 
 def _clamp_window_size(width, height) -> "tuple[int, int]":
-    """拉伸钳制到最小尺寸（与 min_size 同源）；纯函数可测。"""
+    """尺寸钳制（纯函数可测）。
+    v2.0.20：固定尺寸模式（_FIXED_WINDOW_SIZE 已由 run_windowed 写入）下恒返回 80% 工作区尺寸
+    —— 窗口不可拖拽拉伸；最大化/还原走 _set_window_geometry（不经本函数）不受影响。
+    固定值未初始化（服务形态 / 单测）时保持旧的最小尺寸钳制语义。"""
+    if _FIXED_WINDOW_SIZE:
+        return _FIXED_WINDOW_SIZE
     return max(int(width), _WINDOW_MIN_W), max(int(height), _WINDOW_MIN_H)
 
 
@@ -875,6 +893,25 @@ def _monitor_info_safe() -> "list[dict]":
         return _monitor_info()
     except Exception:
         return []
+
+
+def _fixed_window_geometry() -> "tuple[int, int, int, int]":
+    """v2.0.20：固定窗口几何（逻辑像素，x, y, w, h）——主屏工作区的 80%，水平/垂直居中。
+    不依赖窗口已创建（create_window 前置调用）；枚举失败回退 1280×800（≈1600×1000 屏的 80%）。
+    纯计算、无副作用（可单测）。"""
+    mons = _monitor_info_safe()
+    if mons:
+        pick = next((m for m in mons if m.get("primary")), mons[0])
+        wl, wt, ww, wh = pick["work"]
+        try:
+            lx, ly, lw, lh = _physical_to_logical(wl, wt, ww, wh, mons)
+        except Exception:  # 换算异常：按物理值直接用（单屏 100% 缩放下二者等价）
+            lx, ly, lw, lh = int(wl), int(wt), int(ww), int(wh)
+        fw = max(1, int(round(lw * _WINDOW_SIZE_RATIO)))
+        fh = max(1, int(round(lh * _WINDOW_SIZE_RATIO)))
+        return (int(lx) + (int(lw) - fw) // 2, int(ly) + (int(lh) - fh) // 2, fw, fh)
+    return (0, 0, 1280, 800)
+
 
 
 #: v2.0.18：_monitor_info 结果缓存（TTL 30s）——拖拽流每帧 _monitor_info（EnumDisplayMonitors
@@ -1130,8 +1167,8 @@ def toggle_maximize() -> dict:
                 return {"ok": False, "error": "window unavailable"}
             target = _win_maximize_target()
             if target and _is_maximized_geometry(r, target):
-                # 处于最大化 → 还原（saved 缺失回退默认 1280×800 居中语义：0,0 由 WinForms 初始位决定）
-                x, y, ww, hh = _MAX_STATE.get("saved") or (0, 0, 1280, 800)
+                # 处于最大化 → 还原（saved 缺失回退固定 80% 工作区居中——v2.0.20 窗口尺寸固定）
+                x, y, ww, hh = _MAX_STATE.get("saved") or _fixed_window_geometry()
                 _set_window_geometry(w, x, y, ww, hh)
                 _MAX_STATE = {"saved": None}
                 return {"ok": True, "maximized": False}
@@ -1169,13 +1206,108 @@ def set_window_rect(x, y, w, h) -> dict:
         mons = _monitor_info_cached()
         px, py, pw, ph = _logical_to_physical(int(x), int(y), cw, ch, mons)
         cur = _get_window_phys(w_win)
-        if cur and cur[2] == pw and cur[3] == ph:
-            # 无变化 no-op：尺寸相同则不触 Win32（拖拽流同尺寸空帧——防 SetWindowPos 无变化重入）
+        if cur and cur[0] == px and cur[1] == py and cur[2] == pw and cur[3] == ph:
+            # 无变化 no-op：几何完全一致才不触 Win32（v2.0.20：固定尺寸下尺寸恒等，
+            # 若只比尺寸会把「纯位置变化」误判为 no-op —— 位置也必须参与比较）
             return {"ok": True, "x": int(x), "y": int(y), "width": cw, "height": ch, "noop": True}
         _set_window_geometry_phys(w_win, px, py, pw, ph, settle=False)
+        # v2.0.19：每笔拉伸帧刷新看门狗时间戳（正常拖拽永不触发 3s 超时）
+        if _DRAG_REDRAW["active"]:
+            _DRAG_REDRAW["last"] = time.monotonic()
         return {"ok": True, "x": int(x), "y": int(y), "width": cw, "height": ch}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ---- v2.0.19：拖拽期间挂起 WM_SETREDRAW，消除「几何已变 / WebView2 内容未合成」的露底闪烁 ----
+# SetWindowPos 是同步 Win32 调用（外框瞬间变化），而 WebView2 内容合成是异步的；
+# 快速拉伸时新暴露的条带先画窗体背景、下一帧才被内容覆盖 → 肉眼可见闪烁。
+# 拖拽开始时 SendMessageTimeout(WM_SETREDRAW,0) 挂起绘制（含子窗口），结束时恢复并整体刷新。
+_DRAG_REDRAW: dict = {"hwnd": 0, "active": False, "last": 0.0,
+                      "lock": _threading.Lock(), "watchdog": None}
+
+
+def _drag_watchdog(hwnd: int, token: object) -> None:
+    """兜底看门狗：drag_end 丢失（页面崩溃/WS 断线/鼠标在窗口外释放）时强制恢复重绘，
+    避免窗口永久「冻结」在 WM_SETREDRAW=0。3s 无新活动（正常拖拽每帧 set_rect 刷新）即脱手。"""
+    import time as _t
+    while True:
+        _t.sleep(0.5)
+        with _DRAG_REDRAW["lock"]:
+            if not _DRAG_REDRAW["active"] or _DRAG_REDRAW["hwnd"] != hwnd:
+                return
+            if _t.monotonic() - _DRAG_REDRAW["last"] > 3.0:
+                _DRAG_REDRAW["active"] = False
+                _DRAG_REDRAW["watchdog"] = None
+                force = True
+            else:
+                force = False
+        if force:
+            print("[bridge] 拖拽重绘看门狗超时：自动恢复 WM_SETREDRAW")
+            _apply_drag_redraw(hwnd, False)
+            return
+
+
+def _apply_drag_redraw(hwnd: int, suspend: bool) -> dict:
+    """对窗口发送 WM_SETREDRAW；恢复时整体失效重绘。
+    SendMessageTimeout 带 1s 上限，避免 UI 线程忙时 worker 永久阻塞。
+    v2.0.20：**只处理顶层窗体，不再遍历子窗口**——WebView2 宿主窗口被 WM_SETREDRAW=0
+    冻结合成后，恢复时可能整片空白（v2.0.19 实测「点击左上角黑/白屏」的直接原因）。
+    顶层挂起只影响窗体背景绘制，露底条带仍由 GCLP_HBRBACKGROUND 兜底同色。"""
+    if sys.platform != "win32":
+        return {"ok": False, "error": "win32 only"}
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        WM_SETREDRAW = 0x000B
+        RDW_INVALIDATE, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME = 0x0001, 0x0080, 0x0004, 0x0400
+        SMTO_ABORTIFHUNG = 0x0002
+        user32.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                               wintypes.LPARAM, wintypes.UINT, wintypes.UINT,
+                                               ctypes.c_void_p]
+        user32.SendMessageTimeoutW.restype = ctypes.c_ssize_t
+
+        user32.SendMessageTimeoutW(wintypes.HWND(int(hwnd)), WM_SETREDRAW,
+                                   0 if suspend else 1, 0, SMTO_ABORTIFHUNG, 1000, None)
+        if not suspend:
+            user32.RedrawWindow(wintypes.HWND(int(hwnd)), None, None,
+                                RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_FRAME)
+        return {"ok": True, "suspend": suspend, "windows": 1}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def drag_begin() -> dict:
+    """拖拽流开始：挂起重绘 + 启动看门狗（重复调用只刷新活动时间戳）。"""
+    w = _active_window()
+    if w is None:
+        return {"ok": False, "error": "window unavailable"}
+    hwnd = _handle_int(w)
+    with _DRAG_REDRAW["lock"]:
+        first = not _DRAG_REDRAW["active"]
+        if first:
+            r = _apply_drag_redraw(hwnd, True)
+            if not r.get("ok"):
+                return r
+            _DRAG_REDRAW["hwnd"] = hwnd
+            _DRAG_REDRAW["active"] = True
+            _DRAG_REDRAW["watchdog"] = _threading.Thread(
+                target=_drag_watchdog, args=(hwnd, object()), daemon=True, name="drag-redraw-watch")
+            _DRAG_REDRAW["watchdog"].start()
+        _DRAG_REDRAW["last"] = time.monotonic()
+    return {"ok": True, "active": True}
+
+
+def drag_end() -> dict:
+    """拖拽流结束：恢复重绘 + 停看门狗（未拖拽时 no-op，便于 mouseup 无条件调用）。"""
+    with _DRAG_REDRAW["lock"]:
+        if not _DRAG_REDRAW["active"]:
+            return {"ok": True, "noop": True}
+        hwnd = _DRAG_REDRAW["hwnd"]
+        _DRAG_REDRAW["active"] = False
+        _DRAG_REDRAW["watchdog"] = None
+    return _apply_drag_redraw(hwnd, False)
 
 
 def minimize_window() -> dict:
@@ -1196,19 +1328,33 @@ _SUBCLASS_PROCS: "dict[int, object]" = {}
 #  跨线程写 WinForms 属性即使关了检查也会死锁全进程，v2.0.17 实测）
 _SUBCLASS_NET_VALUES: "dict[int, dict]" = {}
 
+# v2.0.19：comctl32.SetWindowSubclass 在 PyInstaller frozen 环境静默失败（ICC 已初始化、
+# GetLastError=0，实测 v2.0.17 记录）→ 增加 GWLP_WNDPROC 兜底。两者都把回调注册到
+# _SUBCLASS_PROCS（供背景色/MinimumSize 归一化判定「钩子已装」），但转发路径不同：
+#   comctl32 → DefSubclassProc；GWLP_WNDPROC → CallWindowProcW(原始 WndProc)。
+_SUBCLASS_FORWARD: "dict[int, object]" = {}
+_ORIGINAL_WNDPROC: "dict[int, int]" = {}
+
+
+def _hwnd_key(hwnd) -> int:
+    """ctypes 回调里的 hwnd 可能是 int 或 c_void_p（依 argtypes 而定），统一取整数键。"""
+    if isinstance(hwnd, int):
+        return hwnd
+    return int(getattr(hwnd, "value", 0) or 0)
+
 
 def _install_closing_hook() -> None:
-    """v2.0.15/17：Win32 WndProc 替换统一处理：
+    """v2.0.15/17/19：Win32 消息钩子统一处理：
     - WM_CLOSE / WM_SYSCOMMAND(SC_CLOSE)：「关闭后进入最小化」开启 → 吞掉并最小化驻留托盘；
       关闭 → 放行（旧语义：窗口销毁 → 退出进程）。事件时读盘判定（改设置即时生效）。
     - WM_USER+100（wParam=0xRRGGBB）/ WM_USER+101：在 **UI 线程** 应用窗体 BackColor /
       MinimumSize（worker 线程只 PostMessage 异步触发——跨线程直接写
       WinForms 属性会死锁全进程，v2.0.17 冒烟实测：uvicorn accept 停摆、全线程 0 CPU）。
-    实现（v2.0.17 终版）：comctl32 SetWindowSubclass（需 exe 携带 comctl32 v6 manifest——
-    packaging/windows/app.manifest.xml 已嵌入 PyInstaller 构建；未接管消息经 DefSubclassProc
-    转发原生链）——不用 WinForms Closing 事件（pythonnet 构造/子类化 .NET 委托在 frozen
-    环境不可用，且跨线程写 WinForms 属性会死锁全进程——v2.0.17 冒烟实测）。
-    best-effort：失败仅记日志（关闭=退出 旧语义保持）。"""
+    安装路径（v2.0.19 修复 frozen 下 SetWindowSubclass 静默失败）：
+      1) comctl32.SetWindowSubclass（需 exe 携带 comctl32 v6 manifest——已嵌入）
+      2) 失败 → SetWindowLongPtrW(GWLP_WNDPROC) 直接替换 WndProc（不依赖 comctl32 v6）
+    两条路径共用同一回调；未接管消息分别经 DefSubclassProc / CallWindowProcW 转发原生链。
+    best-effort：两条都失败仅记日志（关闭=退出旧语义，背景色走 GCLP_HBRBACKGROUND 兜底）。"""
     w = _active_window()
     if w is None or sys.platform != "win32":
         return
@@ -1216,19 +1362,10 @@ def _install_closing_hook() -> None:
         import ctypes
         from ctypes import wintypes
 
-        comctl32 = ctypes.WinDLL("comctl32", use_last_error=True)
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
         h = wintypes.HWND(_handle_int(w))
         WM_CLOSE, WM_SYSCOMMAND, SC_CLOSE = 0x0010, 0x0112, 0xF050
         WMU_BG, WMU_MINSIZE = 0x0400 + 100, 0x0400 + 101
-
-        # SetWindowSubclass 前置（Vista+ ICC_CLASSINIT；需 comctl32 v6 manifest——app.manifest.xml 已嵌入）
-        class _INITCOMMONCONTROLSEX(ctypes.Structure):
-            _fields_ = [("dwSize", ctypes.c_uint32), ("dwICC", ctypes.c_uint32)]
-
-        icc = _INITCOMMONCONTROLSEX()
-        icc.dwSize = ctypes.sizeof(_INITCOMMONCONTROLSEX)
-        icc.dwICC = 0x0080
-        comctl32.InitCommonControlsEx(ctypes.byref(icc))
 
         hkey = _handle_int(w)
 
@@ -1266,11 +1403,14 @@ def _install_closing_hook() -> None:
                     return
                 i32 = wf.Int32
                 scale = _window_dpi_scale()
-                mw = int(round(_WINDOW_MIN_W * scale))
-                mh = int(round(_WINDOW_MIN_H * scale))
+                # v2.0.20：固定尺寸模式下 MinimumSize = 固定尺寸（窗口既不能缩小也不能拖拉伸；
+                # 最大化/还原走 Win32 SetWindowPos 不受 MinimumSize 限制），非固定模式维持 960×600
+                base_w, base_h = _FIXED_WINDOW_SIZE or (_WINDOW_MIN_W, _WINDOW_MIN_H)
+                mw = int(round(base_w * scale))
+                mh = int(round(base_h * scale))
                 form.MinimumSize = wf.Size(i32(mw), i32(mh))
                 vals["min_applied"] = True
-                print(f"[bridge] WinForms 属性归一化完成（UI 线程：MinimumSize={mw}×{mh} 物理 = 逻辑 960×600 @ {scale:g}x）")
+                print(f"[bridge] WinForms 属性归一化完成（UI 线程：MinimumSize={mw}×{mh} 物理 = 逻辑 {base_w}×{base_h} @ {scale:g}x）")
             except Exception as ex:
                 print(f"[bridge] UI 线程应用 MinimumSize 失败（跳过）：{ex}")
 
@@ -1290,33 +1430,114 @@ def _install_closing_hook() -> None:
                     return 0
             except Exception as ex:
                 print(f"[bridge] closing hook 异常，放行：{ex}")
-            # 未接管消息 → 转发 comctl32 原生链（DefSubclassProc 是子类化的正确转发器）
-            return comctl32.DefSubclassProc(hwnd, msg, wparam, lparam)
-
-        comctl32.DefSubclassProc.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-        comctl32.DefSubclassProc.restype = ctypes.c_ssize_t
+            # 未接管消息 → 按实际安装路径转发原生链（v2.0.19）
+            fwd = _SUBCLASS_FORWARD.get(_hwnd_key(hwnd))
+            if fwd is not None:
+                if fwd[0] == "wndproc":
+                    return fwd[1].CallWindowProcW(fwd[2], hwnd, msg, wparam, lparam)
+                return fwd[1].DefSubclassProc(hwnd, msg, wparam, lparam)
+            return 0
 
         proc_ref = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
                                       wintypes.WPARAM, wintypes.LPARAM)(_proc)
+        method = ""
+
+        # 路径 1：comctl32.SetWindowSubclass（v2.0.17 原方案）
+        try:
+            comctl32 = ctypes.WinDLL("comctl32", use_last_error=True)
+
+            # SetWindowSubclass 前置（Vista+ ICC_CLASSINIT；需 comctl32 v6 manifest）
+            class _INITCOMMONCONTROLSEX(ctypes.Structure):
+                _fields_ = [("dwSize", ctypes.c_uint32), ("dwICC", ctypes.c_uint32)]
+
+            icc = _INITCOMMONCONTROLSEX()
+            icc.dwSize = ctypes.sizeof(_INITCOMMONCONTROLSEX)
+            icc.dwICC = 0x0080
+            comctl32.InitCommonControlsEx(ctypes.byref(icc))
+            comctl32.DefSubclassProc.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+            comctl32.DefSubclassProc.restype = ctypes.c_ssize_t
+            comctl32.SetWindowSubclass.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32]
+            comctl32.SetWindowSubclass.restype = ctypes.c_int
+            if comctl32.SetWindowSubclass(h, proc_ref, 1, 0):
+                _SUBCLASS_FORWARD[hkey] = ("comctl32", comctl32)
+                method = "comctl32.SetWindowSubclass"
+            else:
+                print(f"[bridge] SetWindowSubclass 返回 0（err={ctypes.get_last_error()}），改走 GWLP_WNDPROC 兜底")
+        except Exception as ex:
+            print(f"[bridge] SetWindowSubclass 不可用（{ex}），改走 GWLP_WNDPROC 兜底")
+
+        # 路径 2：SetWindowLongPtrW(GWLP_WNDPROC) —— 不依赖 comctl32 v6，frozen 环境可用
+        if not method:
+            try:
+                GWLP_WNDPROC = -4
+                set_wndproc = getattr(user32, "SetWindowLongPtrW", None) or user32.SetWindowLongW
+                set_wndproc.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+                set_wndproc.restype = ctypes.c_ssize_t
+                proc_ptr = ctypes.cast(proc_ref, ctypes.c_void_p).value
+                original = set_wndproc(h, GWLP_WNDPROC, ctypes.c_ssize_t(proc_ptr))
+                if not original:
+                    raise RuntimeError(f"SetWindowLongPtrW 失败 err={ctypes.get_last_error()}")
+                user32.CallWindowProcW.argtypes = [ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
+                                                   wintypes.WPARAM, wintypes.LPARAM]
+                user32.CallWindowProcW.restype = ctypes.c_ssize_t
+                _ORIGINAL_WNDPROC[hkey] = int(original)
+                _SUBCLASS_FORWARD[hkey] = ("wndproc", user32, int(original))
+                method = "SetWindowLongPtrW(GWLP_WNDPROC)"
+            except Exception as ex:
+                print(f"[bridge] GWLP_WNDPROC 兜底安装失败：{ex}")
+
+        if not method:
+            print("[bridge] 窗口消息钩子两条路径均失败（关闭=退出旧语义；背景色走 GCLP_HBRBACKGROUND 兜底）")
+            return
+
         _SUBCLASS_PROCS[hkey] = proc_ref  # 持引用（防 GC 回收后回调野指针）
         _SUBCLASS_NET_VALUES[hkey] = {"min_applied": False, "bg_logged": False}
-        comctl32.SetWindowSubclass.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32]
-        comctl32.SetWindowSubclass.restype = ctypes.c_int
-        ok = comctl32.SetWindowSubclass(h, proc_ref, 1, 0)
-        if not ok:
-            raise RuntimeError(f"SetWindowSubclass 失败 err={ctypes.get_last_error()}（需 comctl32 v6 + ICC_CLASSINIT）")
-        print("[bridge] 窗口关闭钩子安装成功（Win32 子类；Alt+F4/任务栏X 遵循「关闭后进入最小化」）")
+        print(f"[bridge] 窗口消息钩子安装成功（{method}；关闭/背景色/MinimumSize 均生效）")
     except Exception as e:
-        print(f"[bridge] 窗口关闭钩子安装失败（关闭=退出 旧语义保持）：{e}")
+        print(f"[bridge] 窗口消息钩子安装失败（关闭=退出 旧语义保持）：{e}")
+
+
+def _colorref(rgb: int) -> int:
+    """0xRRGGBB → Win32 COLORREF 0x00BBGGRR（低字节在前）；纯函数可测。"""
+    r, g, b = (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF
+    return r | (g << 8) | (b << 16)
+
+
+def _apply_class_background(hwnd: int, rgb: int) -> dict:
+    """v2.0.19：GCLP_HBRBACKGROUND 兜底——直接改窗口类背景画刷（Win32 层，跨线程安全），
+    即使消息钩子完全装不上，WebView2 渲染间隙露出的条带也是主题同色而非白底。"""
+    if sys.platform != "win32":
+        return {"ok": False, "error": "win32 only"}
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+        GCLP_HBRBACKGROUND = -10
+        r, g, b = (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF
+        colorref = _colorref(int(rgb))
+        gdi32.CreateSolidColorBrush.argtypes = [wintypes.DWORD]
+        gdi32.CreateSolidColorBrush.restype = ctypes.c_void_p
+        brush = gdi32.CreateSolidColorBrush(colorref)
+        if not brush:
+            return {"ok": False, "error": "CreateSolidColorBrush failed"}
+        # 旧 brush 泄漏量有界：仅在主题切换时新建（浅/深两个），进程退出系统回收
+        user32.SetClassLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        user32.SetClassLongPtrW.restype = ctypes.c_ulonglong
+        user32.SetClassLongPtrW(wintypes.HWND(int(hwnd)), GCLP_HBRBACKGROUND, ctypes.c_ssize_t(brush))
+        user32.InvalidateRect.argtypes = [wintypes.HWND, ctypes.c_void_p, wintypes.BOOL]
+        user32.InvalidateRect(wintypes.HWND(int(hwnd)), None, True)  # 擦除背景 → 用新 brush 重画
+        return {"ok": True, "rgb": [r, g, b], "applied": "class-brush"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def _post_winforms_normalize(w) -> None:
-    """v2.0.17：向子类（UI 线程）投递归一化消息：默认主题背景色 + MinimumSize 960×600 物理。
-    PostMessage 异步、不阻塞；子类未安装（钩子失败）时直接跳过——B3 回跳已被证明
-    （Win32 直接 SetWindowPos 绕过 WinForms 约束路径）无需该归一化，跳过不劣于现状。"""
+    """v2.0.17/19：向子类（UI 线程）投递归一化消息：默认主题背景色 + MinimumSize 960×600 物理。
+    v2.0.19：子类未安装时不再跳过背景色——改走 GCLP_HBRBACKGROUND 兜底（露底同色）。"""
     h = _handle_int(w)
     if h not in _SUBCLASS_PROCS:
-        print("[bridge] 子类未安装，跳过 WinForms 归一化（保持现状）")
+        print("[bridge] 子类未安装，背景色走 GCLP_HBRBACKGROUND 兜底（MinimumSize 跳过）")
+        _apply_class_background(h, 0x1E1F24)  # 默认主题 dark bg
         return
     import ctypes
     from ctypes import wintypes
@@ -1326,8 +1547,9 @@ def _post_winforms_normalize(w) -> None:
 
 
 def set_window_background(r, g, b) -> dict:
-    """v2.0.17：web 端主题解析后同步窗体背景色。worker 线程只 PostMessage，
-    .NET 属性写由 UI 线程子类回调执行（跨线程直写会死锁全进程——冒烟实测）。"""
+    """v2.0.17/19：web 端主题解析后同步窗体背景色。
+    钩子已装 → worker 线程只 PostMessage，.NET 属性写由 UI 线程回调执行（跨线程直写死锁）；
+    钩子未装 → GCLP_HBRBACKGROUND 兜底（Win32 层改类背景刷，跨线程安全）。"""
     w = _active_window()
     if w is None:
         return {"ok": False, "error": "window unavailable"}
@@ -1335,7 +1557,7 @@ def set_window_background(r, g, b) -> dict:
         return {"ok": False, "error": "rgb out of range"}
     h = _handle_int(w)
     if h not in _SUBCLASS_PROCS:
-        return {"ok": False, "error": "subclass not installed (hook failed at startup)"}
+        return _apply_class_background(h, (int(r) << 16) | (int(g) << 8) | int(b))
     import ctypes
     from ctypes import wintypes
     user32 = ctypes.windll.user32
@@ -1430,7 +1652,7 @@ def run_windowed(port: Optional[int] = None) -> None:
     - 关闭窗口 → 退出全进程（与托盘「退出破晓工具箱」同语义；想服务常驻请用 --service）
     - 窗口引擎不可用（无 WebView2 / 无显示环境等）→ 降级「服务 + 默认浏览器」并保持进程存活
     """
-    global _current_port, _WINDOWED_UI
+    global _current_port, _WINDOWED_UI, _FIXED_WINDOW_SIZE
     import threading as _threading
 
     from .menu_service import project_root as _project_root
@@ -1467,8 +1689,13 @@ def run_windowed(port: Optional[int] = None) -> None:
     try:
         import webview
         _perf("windowed.before_window")  # 距 uvicorn ready 的间隔 ≈ build_app + 托盘线程化后的准备开销
-        webview.create_window("破晓·工具箱", url, width=1280, height=800,
-                              resizable=True, min_size=(960, 600), frameless=True)
+        # v2.0.20：固定尺寸 = 主屏工作区 80%（居中）；resizable=False 去掉 WS_THICKFRAME，
+        # 系统层面也无法拖边拉伸，仅保留 最大化/还原（后端几何驱动，见 toggle_maximize）。
+        fx, fy, fw, fh = _fixed_window_geometry()
+        _FIXED_WINDOW_SIZE = (fw, fh)
+        print(f"[bridge] 固定窗口 {fw}×{fh} @({fx},{fy})（主屏工作区 80%；禁止拖拽拉伸，仅最大化/还原）")
+        webview.create_window("破晓·工具箱", url, x=fx, y=fy, width=fw, height=fh,
+                              resizable=False, min_size=(fw, fh), frameless=True)
         _perf("windowed.window_created")
         _install_window_hooks_once()  # v2.0.17：后台等窗体就绪 → Alt+F4 钩子 + WinForms 属性归一化
         webview.start()  # 阻塞：主线程窗口消息循环；窗口关闭后返回

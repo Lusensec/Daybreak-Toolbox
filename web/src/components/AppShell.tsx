@@ -105,22 +105,36 @@ export default function AppShell() {
   const [closeToTray, setCloseToTray] = useState<boolean | null>(null);
   // v2.0.18：品牌区版本号（app.env → version；服务形态/旧桥接无该字段时不渲染）
   const [appVersion, setAppVersion] = useState<string | null>(null);
-  const dragState = useRef<{ active: boolean; sx: number; sy: number; ox: number; oy: number } | null>(null);
 
-  /** 顶栏非交互目标判定：按钮/链接/输入控件/可脱离项 不参与拖移（品牌区、栏间隙可拖） */
+  /** 顶栏非交互目标判定：按钮/链接/输入控件/可脱离项/图片 不参与拖移（品牌区空白、栏间隙可拖）。
+   *  v2.0.20：显式排除 img —— <img> 默认可原生拖拽（draggable IDL=true 但无属性，
+   *  `[draggable='true']` 选择器匹配不到），原生图片拖拽会吞掉 mouseup，窗口卡在拖拽态。 */
   function isHeaderDragTarget(t: EventTarget | null): boolean {
     if (!(t instanceof HTMLElement)) return false;
-    return !t.closest("button, a, input, select, textarea, [draggable='true']");
+    return !t.closest("button, a, input, select, textarea, img, [draggable='true']");
   }
 
-  /** 顶栏拖拽移动窗口：mousedown 取一次窗口基准 rect → mousemove rAF 节流 window.move（DIP 增量，逻辑像素一致） */
-  // v2.0.17：拖拽/拉伸流「至多一笔在途」背压——前一笔 window.move/set_rect 未 ACK 时本帧跳过
-  //（最新坐标由下一 rAF 携带）；RTT 快时无感，RTT 慢时平滑合并而非成批追帧（防队列堆积阶梯跳变）
+  /** 顶栏拖拽移动窗口：mousedown 取一次窗口基准 rect → mousemove rAF 节流 window.move（DIP 增量）。
+   *  v2.0.17：「至多一笔在途」背压（最新坐标由下一 rAF 携带，慢 RTT 平滑合并而非成批追帧）。
+   *  v2.0.19：自适应节流——RTT 的 EMA > 16ms 时按 RTT 降频，给 WebView2 合成留时间。
+   *  v2.0.20：窗口尺寸固定（不可拉伸）后只剩「移动」，不再调用 drag_begin/drag_end——
+   *  v2.0.19 的 WM_SETREDRAW 挂起会冻死 WebView2 合成（点击左上角黑/白屏的根因）。 */
+  const DRAG_THRESHOLD = 3;  // px：位移小于该值视为单击，不发任何几何命令
   const geoInFlight = useRef(0);
-  function sendGeo(cmd: "window.move" | "window.set_rect", payload: Record<string, unknown>) {
+  const geoRtt = useRef(8);       // 最近 RTT 的指数移动平均（ms）
+  const geoLastSent = useRef(0);  // 上一帧发出时刻（performance.now()）
+  function sendGeo(payload: { x: number; y: number }) {
     if (geoInFlight.current > 0) return;
+    const now = performance.now();
+    // RTT > 16ms（一帧预算）→ 冷却 = RTT×1.25（封顶 64ms），给 WebView2 留合成时间；否则 ~8ms 节流
+    const cooldown = geoRtt.current > 16 ? Math.min(geoRtt.current * 1.25, 64) : 8;
+    if (now - geoLastSent.current < cooldown) return;
+    geoLastSent.current = now;
     geoInFlight.current += 1;
-    void sendCommand(cmd, payload).catch(() => {}).finally(() => {
+    const t0 = now;
+    void sendCommand("window.move", payload).catch(() => {}).finally(() => {
+      const rtt = performance.now() - t0;
+      geoRtt.current = geoRtt.current * 0.7 + rtt * 0.3;  // EMA 平滑，避免单帧抖动误触发降频
       geoInFlight.current -= 1;
     });
   }
@@ -133,23 +147,30 @@ export default function AppShell() {
         const rect = r?.rect;
         if (!rect) return;
         const d = { active: true, sx: e.screenX, sy: e.screenY, ox: rect.x, oy: rect.y };
-        dragState.current = d;
+        let moved = false;   // 超过阈值才进入拖拽（单击/点 logo 不发命令、不进入拖拽态）
         let queued = false;
         let lx = e.screenX, ly = e.screenY;
         const onMove = (ev: MouseEvent) => {
           lx = ev.screenX; ly = ev.screenY;
-          if (queued || !d.active) return;
+          if (!d.active) return;
+          if (!moved && Math.abs(lx - d.sx) < DRAG_THRESHOLD && Math.abs(ly - d.sy) < DRAG_THRESHOLD) return;
+          moved = true;
+          if (queued) return;
           queued = true;
           requestAnimationFrame(() => {
             queued = false;
             if (!d.active) return;
-            sendGeo("window.move", { x: d.ox + (lx - d.sx), y: d.oy + (ly - d.sy) });
+            sendGeo({ x: d.ox + (lx - d.sx), y: d.oy + (ly - d.sy) });
           });
         };
         const onUp = () => {
           d.active = false;
           window.removeEventListener("mousemove", onMove);
           window.removeEventListener("mouseup", onUp);
+          // 补发最终位置（节流可能跳过最后一帧）→ 窗口精确停在光标处；单击则完全不动
+          if (moved) {
+            void sendCommand("window.move", { x: d.ox + (lx - d.sx), y: d.oy + (ly - d.sy) }).catch(() => {});
+          }
         };
         window.addEventListener("mousemove", onMove);
         window.addEventListener("mouseup", onUp);
@@ -170,80 +191,9 @@ export default function AppShell() {
     } catch { /* 桥接未就绪 */ }
   }
 
-  /** 边缘/角落拉伸（v2.0.10：左/右/下边缘 + 左下/右下角；替换 v2.0.8 单一右下角手柄）。
-      基准 rect 一次取 → mousemove rAF 节流；左缘/左下先 window.move（新左上角）再 window.resize
-      （后端 N|W 固定点，顺序保证左上角跟随）；客户端镜像最小 960×600（与后端 _clamp_window_size 同源）。
-      最大化中拖边缘 = 原生语义「自动还原后拉伸」：mousedown 时若处于最大化先还原（服务端几何驱动）。 */
-  const EDGE_MIN_W = 960;
-  const EDGE_MIN_H = 600;
-  type EdgeZone = "left" | "right" | "bottom" | "bl" | "br" | "tl" | "tr";
+  /** v2.0.20：窗口尺寸固定为主屏工作区 80%，边缘/角落拉伸手柄与相关几何逻辑已移除
+   *  （后端 resizable=False + _clamp_window_size 固定值双保险）。仅保留 最大化/还原。 */
 
-  function onEdgeResizeStart(zone: EdgeZone) {
-    return (e: React.MouseEvent) => {
-      if (!windowed || e.button !== 0) return;
-      e.preventDefault();
-      void (async () => {
-        try {
-          let rectRes = (await sendCommand("window.get_rect", {})) as { rect?: { x: number; y: number; width: number; height: number } | null };
-          let rect = rectRes?.rect;
-          if (!rect) return;
-          // 最大化中拖边缘：先还原（服务端按几何判定执行还原），再取新几何为基准
-          if (maximized) {
-            const m = (await sendCommand("window.maximize", {})) as { ok?: boolean; maximized?: boolean };
-            if (m?.ok) setMaximized(Boolean(m.maximized));
-            rectRes = (await sendCommand("window.get_rect", {})) as { rect?: { x: number; y: number; width: number; height: number } | null };
-            rect = rectRes?.rect;
-            if (!rect) return;
-          }
-          let active = true;
-          const sx = e.screenX, sy = e.screenY;
-          const ox = rect.x, oy = rect.y, ow = rect.width, oh = rect.height;
-          let queued = false;
-          let lx = sx, ly = sy;
-          const onMove = (ev: MouseEvent) => {
-            lx = ev.screenX; ly = ev.screenY;
-            if (queued || !active) return;
-            queued = true;
-            requestAnimationFrame(() => {
-              queued = false;
-              if (!active) return;
-              const dx = lx - sx, dy = ly - sy;
-              let w = ow, h = oh, x = ox, y = oy;
-              if (zone === "right" || zone === "br") w = ow + dx;
-              if (zone === "bottom" || zone === "bl") h = oh + dy;
-              if (zone === "left" || zone === "bl" || zone === "tl") {
-                w = Math.max(EDGE_MIN_W, ow - dx);
-                x = ox + (ow - w); // 左上角随左缘右移
-              }
-              if (zone === "tr") w = ow + dx; // 右上角：右缘随拖拽右移变宽（x 锚定 ox）
-              if (zone === "tl" || zone === "tr") {
-                h = oh - dy; // 顶缘下移 → 窗口变矮
-                y = oy + dy;
-              }
-              w = Math.max(EDGE_MIN_W, w); // 客户端镜像钳制（后端 _clamp_window_size 双保险）
-              h = Math.max(EDGE_MIN_H, h);
-              if (zone === "tl" || zone === "tr") {
-                y = oy + (oh - h); // 底缘锚定（lead 复核 v2.0.18）：最小高钳制触发后顶缘按钳后 h 重锚
-                // （对称 left 的 x=ox+(ow-w) 右缘锚定；未钳制时恒等于 oy+dy，无行为变化。
-                //  tl 右下固定 / tr 左下固定：整个窗口不再随光标越界下滑）
-              }
-              // 位置+大小一次原子提交（window.set_rect 单次 SetWindowPos）：
-              // 旧版 左缘=move+resize 两步快连发会被 WinForms UI 线程吞一笔 → 卡顿/位置钉死
-              // v2.0.17：走 sendGeo（至多一笔在途背压，防慢 RTT 队列堆积成批追帧）
-              sendGeo("window.set_rect", { x, y, width: w, height: h });
-            });
-          };
-          const onUp = () => {
-            active = false;
-            window.removeEventListener("mousemove", onMove);
-            window.removeEventListener("mouseup", onUp);
-          };
-          window.addEventListener("mousemove", onMove);
-          window.addEventListener("mouseup", onUp);
-        } catch { /* 桥接未就绪 */ }
-      })();
-    };
-  }
 
   /** 固定菜单右键：隐藏 / 显示菜单栏（参数存 config.json，1 显示 / 0 隐藏） */
   async function toggleFixedMenu(name: string) {
@@ -357,10 +307,25 @@ export default function AppShell() {
     <div className="app-shell">
       <header className="menu-bar" ref={topBarRef} onMouseDown={onHeaderDragStart} onDoubleClick={onHeaderDblClick}>
         <div className="menu-brand">
-          <img className="menu-brand__logo" src={isDark ? "/logo.png" : "/logo-light.png"} alt="破晓·工具箱" />
+          <img
+            className="menu-brand__logo"
+            src={isDark ? "/logo.png" : "/logo-light.png"}
+            alt="破晓·工具箱"
+            draggable={false}
+          />
           <div className="menu-brand__text">
             <span className="menu-title">破晓·工具箱</span>
-            {appVersion ? <span className="menu-brand__version">v{appVersion}</span> : null}
+            {/* v2.0.20：版本号（椭圆底色胶囊）+ 紧邻右侧的桥接连接状态；
+                原底部状态栏（就绪 · 破晓·工具箱 / 已连接）已移除，状态收敛到此处 */}
+            <div className="menu-brand__meta">
+              {appVersion ? <span className="menu-brand__version">v{appVersion}</span> : null}
+              <span className="menu-brand__conn" data-state={online ? "online" : "offline"} title={lastError ?? ""}>
+                {online ? <Wifi size={11} /> : <WifiOff size={11} />}
+                <span>
+                  {conn === "online" ? "已连接" : conn === "reconnecting" ? "重连中" : conn === "connecting" ? "连接中" : "未连接"}
+                </span>
+              </span>
+            </div>
           </div>
         </div>
         <nav className="menu-nav" ref={menuNavRef}>
@@ -484,13 +449,8 @@ export default function AppShell() {
         ) : null}
       </main>
 
-      <footer className="status-bar">
-        <span className="status-text">就绪 · 破晓·工具箱</span>
-        <span className="status-badge" data-state={online ? "online" : "offline"} title={lastError ?? ""}>
-          {online ? <Wifi size={13} /> : <WifiOff size={13} />}
-          &nbsp;{conn === "online" ? "已连接" : conn === "reconnecting" ? "重连中…" : conn === "connecting" ? "连接中…" : "未连接"}
-        </span>
-      </footer>
+      {/* v2.0.20：底部状态栏已移除（「就绪 · 破晓·工具箱」+ 已连接徽标）——
+          连接状态移至顶栏品牌区版本号右侧；主内容区因此多出 28px 高度 */}
 
       {/* 菜单栏拖出脱离的子窗口（浮动层，纯 UI 状态；刷新全部收回栏内） */}
       <FloatingWindowHost />
@@ -511,23 +471,8 @@ export default function AppShell() {
       {/* 全局重命名对话框（替代 window.prompt；顶栏右键 / 设置页 / 子窗口 共用） */}
       <PromptDialogHost />
 
-      {/* 全边缘拉伸手柄（v2.0.10，仅无边框窗口形态）：左/右缘 6px、下缘 6px + 四个角 14px，
-          任意边缘位置可拖动调整窗口大小（最小 960×600 客户端镜像 + 后端 _clamp_window_size 双保险）；
-          顶缘中央不做（顶栏 48px 为拖移区），左上/右上角各 14×14 方形区（v2.0.18，紧贴顶栏正下方，
-          CSS top:48px + 与同侧边缘 6px 热区叠压时 DOM 后渲染胜出）→ 顶角斜向拉伸；
-          模态层打开时边缘被盖住不可拉伸（可接受） */}
-      {windowed ? (
-        <>
-          <div className="win-edge win-edge--left" onMouseDown={onEdgeResizeStart("left")} title="拖动调整窗口大小" />
-          <div className="win-edge win-edge--right" onMouseDown={onEdgeResizeStart("right")} title="拖动调整窗口大小" />
-          {/* 顶角斜拉区（v2.0.18）：DOM 上后于同侧边缘渲染 → 6px 叠压带角落胜出（与下缘 bl/br 同构） */}
-          <div className="win-edge win-edge--tl" onMouseDown={onEdgeResizeStart("tl")} title="拖动调整窗口大小" />
-          <div className="win-edge win-edge--tr" onMouseDown={onEdgeResizeStart("tr")} title="拖动调整窗口大小" />
-          <div className="win-edge win-edge--bottom" onMouseDown={onEdgeResizeStart("bottom")} title="拖动调整窗口大小" />
-          <div className="win-edge win-edge--bl" onMouseDown={onEdgeResizeStart("bl")} title="拖动调整窗口大小" />
-          <div className="win-edge win-edge--br" onMouseDown={onEdgeResizeStart("br")} title="拖动调整窗口大小" />
-        </>
-      ) : null}
+      {/* v2.0.20：全边缘/角落拉伸手柄（.win-edge-*）已移除——窗口固定为主屏工作区 80%，
+          仅保留顶栏 最大化/还原 与关闭；无边框窗口不再响应任何边缘拖拽拉伸 */}
     </div>
   );
 }
