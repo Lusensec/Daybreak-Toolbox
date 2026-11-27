@@ -103,6 +103,8 @@ export default function AppShell() {
   const [maximized, setMaximized] = useState(false);
   // v2.0.15「关闭后进入最小化」状态（settings.get；仅影响 X 按钮提示文案——行为由桥接侧统一判定）
   const [closeToTray, setCloseToTray] = useState<boolean | null>(null);
+  // v2.0.18：品牌区版本号（app.env → version；服务形态/旧桥接无该字段时不渲染）
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const dragState = useRef<{ active: boolean; sx: number; sy: number; ox: number; oy: number } | null>(null);
 
   /** 顶栏非交互目标判定：按钮/链接/输入控件/可脱离项 不参与拖移（品牌区、栏间隙可拖） */
@@ -174,7 +176,7 @@ export default function AppShell() {
       最大化中拖边缘 = 原生语义「自动还原后拉伸」：mousedown 时若处于最大化先还原（服务端几何驱动）。 */
   const EDGE_MIN_W = 960;
   const EDGE_MIN_H = 600;
-  type EdgeZone = "left" | "right" | "bottom" | "bl" | "br";
+  type EdgeZone = "left" | "right" | "bottom" | "bl" | "br" | "tl" | "tr";
 
   function onEdgeResizeStart(zone: EdgeZone) {
     return (e: React.MouseEvent) => {
@@ -209,12 +211,22 @@ export default function AppShell() {
               let w = ow, h = oh, x = ox, y = oy;
               if (zone === "right" || zone === "br") w = ow + dx;
               if (zone === "bottom" || zone === "bl") h = oh + dy;
-              if (zone === "left" || zone === "bl") {
+              if (zone === "left" || zone === "bl" || zone === "tl") {
                 w = Math.max(EDGE_MIN_W, ow - dx);
                 x = ox + (ow - w); // 左上角随左缘右移
               }
+              if (zone === "tr") w = ow + dx; // 右上角：右缘随拖拽右移变宽（x 锚定 ox）
+              if (zone === "tl" || zone === "tr") {
+                h = oh - dy; // 顶缘下移 → 窗口变矮
+                y = oy + dy;
+              }
               w = Math.max(EDGE_MIN_W, w); // 客户端镜像钳制（后端 _clamp_window_size 双保险）
               h = Math.max(EDGE_MIN_H, h);
+              if (zone === "tl" || zone === "tr") {
+                y = oy + (oh - h); // 底缘锚定（lead 复核 v2.0.18）：最小高钳制触发后顶缘按钳后 h 重锚
+                // （对称 left 的 x=ox+(ow-w) 右缘锚定；未钳制时恒等于 oy+dy，无行为变化。
+                //  tl 右下固定 / tr 左下固定：整个窗口不再随光标越界下滑）
+              }
               // 位置+大小一次原子提交（window.set_rect 单次 SetWindowPos）：
               // 旧版 左缘=move+resize 两步快连发会被 WinForms UI 线程吞一笔 → 卡顿/位置钉死
               // v2.0.17：走 sendGeo（至多一笔在途背压，防慢 RTT 队列堆积成批追帧）
@@ -297,7 +309,11 @@ export default function AppShell() {
     bindSshEvents();
     // 窗口形态探测：无边框窗口（frameless）才渲染 最大化/关闭X/拖移/拉伸 控件（浏览器/服务形态隐藏）
     sendCommand("app.env", {})
-      .then((r) => { if ((r as { windowed?: boolean }).windowed) { setWindowed(true); } })
+      .then((r) => {
+        const env = r as { windowed?: boolean; version?: string };
+        if (env.windowed) { setWindowed(true); }
+        if (typeof env.version === "string" && env.version) { setAppVersion(env.version); }
+      })
       .catch(() => {});
     // v2.0.15：关闭行为提示（X 按钮 tooltip）——设置即时生效，改键时经 settings.changed 同步
     sendCommand("settings.get", {})
@@ -342,7 +358,10 @@ export default function AppShell() {
       <header className="menu-bar" ref={topBarRef} onMouseDown={onHeaderDragStart} onDoubleClick={onHeaderDblClick}>
         <div className="menu-brand">
           <img className="menu-brand__logo" src={isDark ? "/logo.png" : "/logo-light.png"} alt="破晓·工具箱" />
-          <span className="menu-title">破晓·工具箱</span>
+          <div className="menu-brand__text">
+            <span className="menu-title">破晓·工具箱</span>
+            {appVersion ? <span className="menu-brand__version">v{appVersion}</span> : null}
+          </div>
         </div>
         <nav className="menu-nav" ref={menuNavRef}>
           {/* 顺序：首页 → 动态加载的用户菜单 → 固定功能面板（均按 菜单栏展示 参数 1/0 显隐；可拖出顶栏脱离为子窗口） */}
@@ -492,13 +511,18 @@ export default function AppShell() {
       {/* 全局重命名对话框（替代 window.prompt；顶栏右键 / 设置页 / 子窗口 共用） */}
       <PromptDialogHost />
 
-      {/* 全边缘拉伸手柄（v2.0.10，仅无边框窗口形态）：左/右缘 6px、下缘 6px + 左下/右下角 14px，
+      {/* 全边缘拉伸手柄（v2.0.10，仅无边框窗口形态）：左/右缘 6px、下缘 6px + 四个角 14px，
           任意边缘位置可拖动调整窗口大小（最小 960×600 客户端镜像 + 后端 _clamp_window_size 双保险）；
-          顶缘不做（顶栏是拖移区）；模态层打开时边缘被盖住不可拉伸（可接受） */}
+          顶缘中央不做（顶栏 48px 为拖移区），左上/右上角各 14×14 方形区（v2.0.18，紧贴顶栏正下方，
+          CSS top:48px + 与同侧边缘 6px 热区叠压时 DOM 后渲染胜出）→ 顶角斜向拉伸；
+          模态层打开时边缘被盖住不可拉伸（可接受） */}
       {windowed ? (
         <>
           <div className="win-edge win-edge--left" onMouseDown={onEdgeResizeStart("left")} title="拖动调整窗口大小" />
           <div className="win-edge win-edge--right" onMouseDown={onEdgeResizeStart("right")} title="拖动调整窗口大小" />
+          {/* 顶角斜拉区（v2.0.18）：DOM 上后于同侧边缘渲染 → 6px 叠压带角落胜出（与下缘 bl/br 同构） */}
+          <div className="win-edge win-edge--tl" onMouseDown={onEdgeResizeStart("tl")} title="拖动调整窗口大小" />
+          <div className="win-edge win-edge--tr" onMouseDown={onEdgeResizeStart("tr")} title="拖动调整窗口大小" />
           <div className="win-edge win-edge--bottom" onMouseDown={onEdgeResizeStart("bottom")} title="拖动调整窗口大小" />
           <div className="win-edge win-edge--bl" onMouseDown={onEdgeResizeStart("bl")} title="拖动调整窗口大小" />
           <div className="win-edge win-edge--br" onMouseDown={onEdgeResizeStart("br")} title="拖动调整窗口大小" />

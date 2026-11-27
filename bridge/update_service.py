@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.0.17"
+APP_VERSION = "2.0.18"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,13 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.0.18":
+"""
+窗口体验三项优化：
+1、顶栏左上/右上角新增 14×14 斜向拉伸区（紧贴顶栏正下方；hover 斜纹提示，与下缘角落同构；仅窗口形态渲染角落手柄）
+2、拖拽拉伸闪烁根因修复：显示器信息 30s 缓存（免每帧枚举）、几何不变帧 no-op 免 Win32 重入、MinimumSize 按窗口显示器缩放等比归一（消除 >100% 缩放回跳）、流式 SetWindowPos 去 SWP_SHOWWINDOW
+3、顶栏品牌区展示版本号（单一来源 update_service.APP_VERSION 经 app.env 下发；不可用/旧桥接不渲染）
+""",
     "v2.0.17":
 """
 Windows 安装/卸载界面中文化 + 修复下边框拉伸闪烁晃动：

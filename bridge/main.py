@@ -628,7 +628,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.17", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.0.18", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")
@@ -756,8 +756,10 @@ _WINDOW_MIN_W, _WINDOW_MIN_H = 960, 600  # 与 run_windowed 的 min_size 同源
 
 
 def get_app_env() -> dict:
-    """进程运行形态（web 端据此决定渲染 关闭X/最大化/拖移/拉伸 控件；非窗口形态不渲染）。"""
-    return {"windowed": _WINDOWED_UI, "frameless": _WINDOWED_UI, "platform": sys.platform}
+    """进程运行形态（web 端据此决定渲染 关闭X/最大化/拖移/拉伸 控件；非窗口形态不渲染）。
+    v2.0.18：新增 version（单一来源 update_service.APP_VERSION；web 品牌区展示，取不到不渲染）。"""
+    return {"windowed": _WINDOWED_UI, "frameless": _WINDOWED_UI, "platform": sys.platform,
+            "version": APP_VERSION}
 
 
 def _active_window():
@@ -873,6 +875,25 @@ def _monitor_info_safe() -> "list[dict]":
         return _monitor_info()
     except Exception:
         return []
+
+
+#: v2.0.18：_monitor_info 结果缓存（TTL 30s）——拖拽流每帧 _monitor_info（EnumDisplayMonitors
+#: + GetDpiForMonitor）开销可观且结果低频变化（显示器插拔/缩放变更 <30s），缓存续缓拖拽流
+#: 的 CPU/GC 压力；_monitor_info_cached 命中即返回同一 list（调用方只读，不共享可变引用）。
+_MONITOR_CACHE: "tuple[float, list] | None" = None
+_MONITOR_TTL = 30.0
+
+
+def _monitor_info_cached() -> "list[dict]":
+    """_monitor_info_safe 的带 TTL 缓存版（流式路径 set_window_rect 用；一次性状态变更仍走
+    _monitor_info_safe 现枚举，保证 maximize/restore 读到真实工作区）。"""
+    global _MONITOR_CACHE
+    now = time.monotonic()
+    if _MONITOR_CACHE and now - _MONITOR_CACHE[0] < _MONITOR_TTL:
+        return _MONITOR_CACHE[1]
+    info = _monitor_info_safe()
+    _MONITOR_CACHE = (now, info)
+    return info
 
 
 def _monitor_scale(hMon, fallback: float = 1.0) -> float:
@@ -1003,6 +1024,8 @@ def _set_window_geometry_phys(w, px, py, pw, ph, keep_size: bool = False,
     - 后端 resize 内部读 Location 决定固定点，跨线程读到旧值会把窗口钉回错误位置。
     串行锁保证原子性；ShowWindow(Normal) 清残留 showCmd（仅 settle=True 一次性路径——
     流式路径 60fps 每笔 ShowWindow 会强制重绘触发闪烁，v2.0.17 移除）。
+    v2.0.18：SetWindowPos 的 SWP_SHOWWINDOW（0x40）位同样仅 settle=True 携带
+    （流式每笔强制 show 语义 = 每帧重绘压力，与 ShowWindow(Normal) 同因）。
     keep_size=True 时忽略 pw/ph，保持窗口当前物理尺寸（move 用）。
     settle（v2.0.16）：120ms 落定延时 —— 仅「一次性状态变更」（最大化/还原/单条 resize）需要，
     给 WebView2 布局留消化时间；**连续拖拽流**（顶栏 move / 边缘 set_rect，60fps）置 False：
@@ -1016,7 +1039,12 @@ def _set_window_geometry_phys(w, px, py, pw, ph, keep_size: bool = False,
         if keep_size:
             cur = _get_window_phys(w)
             pw, ph = (cur[2], cur[3]) if cur else (int(pw), int(ph))
-        user32.SetWindowPos(handle, None, int(px), int(py), int(pw), int(ph), 0x04 | 0x40 | 0x10)
+        # 0x04 NOZORDER | 0x40 SHOWWINDOW | 0x10 NOACTIVATE。
+        # v2.0.18：SHOWWINDOW 仅一次性（settle=True）路径携带——流式 60fps 每笔强制 show 语义
+        # 触发重绘是拉伸闪烁根因之一（与 v2.0.17 去每帧 ShowWindow(Normal) 同因）；
+        # settle 路径保留（清残留 showCmd + 其后显式 ShowWindow(Normal) 双保险）。
+        flags = 0x04 | (0x40 if settle else 0) | 0x10
+        user32.SetWindowPos(handle, None, int(px), int(py), int(pw), int(ph), flags)
         if settle:
             user32.ShowWindow(handle, 1)  # SW_SHOWNORMAL：清残留 Maximized/Minimized 状态
             time.sleep(0.12)  # 让 UI 线程消化 WM_MOVE/WM_SIZE，下一笔才不会被吞
@@ -1129,14 +1157,22 @@ def toggle_maximize() -> dict:
 
 def set_window_rect(x, y, w, h) -> dict:
     """窗口几何原子设置（位置+大小一次 SetWindowPos；边缘左缘/左下拖拽用——先挪左上角再改宽，
-    两步分开快连发会被 UI 线程吞一笔）。尺寸走 _clamp_window_size（与 window.resize 同源）。"""
+    两步分开快连发会被 UI 线程吞一笔）。尺寸走 _clamp_window_size（与 window.resize 同源）。
+    v2.0.18：拖拽流（settle=False）几何逐像素不变时直接 no-op（不触 Win32 重入）；
+    流式路径用 _monitor_info_cached 避免每帧 EnumDisplayMonitors+GetDpiForMonitor。"""
     w_win = _active_window()
     if w_win is None:
         return {"ok": False, "error": "window unavailable"}
     try:
         cw, ch = _clamp_window_size(w, h)
         # v2.0.16：边缘拖拽流（连续 set_rect）不串行等 120ms（同上：同步 SetWindowPos 连发安全）
-        _set_window_geometry(w_win, int(x), int(y), cw, ch, settle=False)
+        mons = _monitor_info_cached()
+        px, py, pw, ph = _logical_to_physical(int(x), int(y), cw, ch, mons)
+        cur = _get_window_phys(w_win)
+        if cur and cur[2] == pw and cur[3] == ph:
+            # 无变化 no-op：尺寸相同则不触 Win32（拖拽流同尺寸空帧——防 SetWindowPos 无变化重入）
+            return {"ok": True, "x": int(x), "y": int(y), "width": cw, "height": ch, "noop": True}
+        _set_window_geometry_phys(w_win, px, py, pw, ph, settle=False)
         return {"ok": True, "x": int(x), "y": int(y), "width": cw, "height": ch}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -1216,7 +1252,10 @@ def _install_closing_hook() -> None:
                 print(f"[bridge] UI 线程应用 BackColor 失败（跳过）：{ex}")
 
         def _apply_min_size():
-            """UI 线程回调内：MinimumSize 归一化（100% 屏最差情形 960×600 物理，防 WinForms 回跳）。"""
+            """UI 线程回调内：MinimumSize 归一化——逻辑 960×600 按窗口所在显示器 scale 换算为
+            物理像素（v2.0.18：旧版写死 960×600 物理，>100% 缩放下物理最小值 < 逻辑最小值 →
+            WinForms 回跳引发拉伸间隙抖动；现按 GetDpiForWindow 等比放大，钳制语义与
+            _clamp_window_size 同源；100% 屏 scale=1.0 → 旧行为）。"""
             try:
                 vals = _SUBCLASS_NET_VALUES.get(hkey)
                 if not vals or vals.get("min_applied"):
@@ -1226,9 +1265,12 @@ def _install_closing_hook() -> None:
                 if wf is None or form is None:
                     return
                 i32 = wf.Int32
-                form.MinimumSize = wf.Size(i32(960), i32(600))
+                scale = _window_dpi_scale()
+                mw = int(round(_WINDOW_MIN_W * scale))
+                mh = int(round(_WINDOW_MIN_H * scale))
+                form.MinimumSize = wf.Size(i32(mw), i32(mh))
                 vals["min_applied"] = True
-                print("[bridge] WinForms 属性归一化完成（UI 线程：MinimumSize=960×600 物理）")
+                print(f"[bridge] WinForms 属性归一化完成（UI 线程：MinimumSize={mw}×{mh} 物理 = 逻辑 960×600 @ {scale:g}x）")
             except Exception as ex:
                 print(f"[bridge] UI 线程应用 MinimumSize 失败（跳过）：{ex}")
 

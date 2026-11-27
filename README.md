@@ -170,6 +170,13 @@ Base64 / URL / Unicode / JSON / MD5 / 乱码恢复。
 
 # 七、更新记录
 
+## v2.0.18
+
+窗口体验三项优化：
+1、顶栏左上/右上角新增 14×14 斜向拉伸区（紧贴顶栏下方；光标 nesw/nwse，hover 斜纹提示，与下缘角落同构）
+2、拖拽拉伸闪烁根因修复：显示器信息 30s 缓存（免每帧枚举）、几何不变帧 no-op 免 Win32 重入、MinimumSize 按窗口显示器缩放等比归一（消除 >100% 缩放回跳）、流式 SetWindowPos 去 SWP_SHOWWINDOW；v2.0.17 三项（无每帧 ShowWindow / 背景色随主题 / 单笔在途背压）不回退
+3、顶栏品牌区展示版本号（单一来源 update_service.APP_VERSION 经 app.env 下发；不可用/旧桥接不渲染）
+
 ## v2.0.17
 
 Windows 安装/卸载界面中文化 + 修复下边框拉伸闪烁晃动：
