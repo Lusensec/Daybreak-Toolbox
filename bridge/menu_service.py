@@ -22,7 +22,9 @@
   （「工具使用」为空的工具直接丢弃不展示）→ 旧本地相对路径改写为绝对路径（指向原
   menu_path 位置，文件不搬动）→ 删除旧 tools.txt。回滚 = config.json.bak 覆盖。
 
-固定菜单栏（首页/AI对话/…）显隐表：根级保留键 __fixed_menu_visible__（1 显示 / 0 隐藏）。
+固定菜单栏显隐表：根级保留键 __fixed_menu_visible__（1 显示 / 0 隐藏）。
+v2.1.3：AI对话/终端管理/编解码/汉英翻译/临时笔记 等固定功能面板已移除，固定菜单只剩「首页」，
+该保留键仅为兼容旧配置文件保留（缺省视为显示）。
 
 错误码：
   MENU_NOT_FOUND / NAV_NAME_EXISTS / MENU_NAME_EXISTS / TOOL_NAME_EXISTS /
@@ -92,16 +94,7 @@ def load_config() -> dict:
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
     _maybe_migrate(cfg)
-    _maybe_migrate_fixed_rename(cfg)
     return cfg
-
-
-def _maybe_migrate_fixed_rename(cfg: dict) -> None:
-    """一次性改名迁移：固定菜单栏「本地终端」→「终端管理」（显隐表旧键平移，幂等）。"""
-    table = cfg.get(_FIXED_VISIBLE_KEY)
-    if isinstance(table, dict) and "本地终端" in table and "终端管理" not in table:
-        table["终端管理"] = table.pop("本地终端")
-        _atomic_write_json(_CONFIG_PATH, cfg)
 
 
 def _menu_items(cfg: dict) -> list:

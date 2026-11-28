@@ -4,7 +4,7 @@
   close_to_tray  「关闭后进入最小化」——开启时 顶栏关闭(X) / Alt+F4 → 窗口最小化并驻留托盘
                  （进程常驻，托盘菜单可重新唤回），而非退出进程。默认 False（关闭=退出，旧语义）。
 
-设计对齐 shortcut_service / ssh_service：
+设计对齐 shortcut_service / menu_service：
   - 相对项目根（frozen → exe 旁；开发 → 仓库根），set_root 供测试隔离
   - 原子写（临时文件 + os.replace），损坏/缺失 → 默认值（不抛）
   - 读无缓存：文件极小（<200B），每次读盘保证多进程/多端改动能即时看到

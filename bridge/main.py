@@ -5,7 +5,7 @@
   ├─ uvicorn (thread) 127.0.0.1:8765
   │   ├─ /ws   WebSocket 事件总线（token 鉴权）
   │   └─ /api  REST（配置 CRUD，token 鉴权）
-  └─ 各 service（ai / translate / codec / shell / menu）
+  └─ 各 service（menu / execute / dialog / shortcut / settings / update）
 
 本文件为 **Phase 1 骨架**：
   - 端口 8765 起冲突 +1 最多 5 次
@@ -27,7 +27,6 @@ import socket
 import sys
 import threading
 import time
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -37,12 +36,6 @@ from fastapi.responses import JSONResponse
 
 from . import token as _token_mod
 from .ws import WsBus, BridgeError
-from .translate_service import TranslateService
-from .ai_service import AiService
-from .ai_config import (get_ai_config, set_ai_config, test_ai,
-                       add_ai_model, remove_ai_model, AiConfigError,
-                       get_ai_history, set_ai_history, set_ai_page)
-from .codec_service import CodecService
 from .menu_service import (list_menus, add_menu, delete_menu, rename_menu, rename_nav,
                            add_nav, delete_nav,
                           reorder_menus, reorder_navs,
@@ -60,9 +53,6 @@ from .update_service import (
     save_repo,
 )
 from .shortcut_service import get_shortcuts, set_shortcuts, ShortcutError
-from . import shell_service
-from . import ssh_service
-from . import token as _token
 from .tray import start_tray
 
 # ---- 端口探测（8765..8770）----
@@ -91,21 +81,8 @@ def find_free_port(base: int = _BASE_PORT, retries: int = _MAX_RETRY) -> int:
 
 # ---- 全局实例 ----
 _bus = WsBus()
-_translate_service: Optional[TranslateService] = None
-_ai_service: Optional[AiService] = None
-_codec_service: Optional[CodecService] = None
 _bridge_loop: Optional[asyncio.AbstractEventLoop] = None  # 跨线程广播用
 _current_port: Optional[int] = None
-
-
-def _thread_broadcast(event: str, payload: dict) -> None:
-    """供阻塞线程（翻译 worker）调用的同步广播桥。
-    无事件循环时忽略（测试场景）；否则 run_coroutine_threadsafe 投递到主循环。"""
-    if _bridge_loop and _bridge_loop.is_running():
-        try:
-            asyncio.run_coroutine_threadsafe(_bus.broadcast(event, payload), _bridge_loop)
-        except RuntimeError:
-            pass
 
 
 def _register_builtin_commands() -> None:
@@ -120,171 +97,6 @@ def _register_builtin_commands() -> None:
 
     async def _ping_handler(payload: dict, _ws) -> dict:
         return {"pong": True}
-
-    # ---- 翻译 handler（translate.run）：service 在 worker 线程跑，结果经 _thread_broadcast 回 WS ----
-    global _translate_service
-    _translate_service = TranslateService(_thread_broadcast)
-
-    async def _translate_run(payload: dict, _ws) -> dict:
-        req_id = str(payload.get("req_id") or uuid.uuid4())
-        # 异步受理（service 已在后台线程跑，立即回 ack，结果走事件）
-        _translate_service.run(req_id, str(payload.get("text", "")),
-                               str(payload.get("from_lang", "auto")),
-                               str(payload.get("to_lang", "auto")))
-        return {"accepted": True, "req_id": req_id}
-
-    _bus.register("translate.run", _translate_run)
-
-    # ---- 翻译凭证（工具箱设置「翻译设置」）：与 bridge token 同存 config/bridge_secrets.json ----
-    async def _translate_get_creds(_p, _ws) -> dict:
-        b = _token.get_baidu()
-        return {"ok": True,
-                "configured": bool(b["app_id"] and b["secret_key"]),
-                "app_id": b["app_id"],
-                "secret_key_configured": bool(b["secret_key"]),
-                # 本机 127.0.0.1 单用户工具：密钥已在 config/bridge_secrets.json 明文落地，
-                # 回传给前端供「翻译设置」掩码回显（默认 * 号，小眼睛切换明文）
-                "secret_key": b["secret_key"]}
-
-    async def _translate_set_creds(p, _ws) -> dict:
-        app_id = str(p.get("app_id", "")).strip()
-        sec_new = str(p.get("secret_key", "")).strip()
-        if not sec_new:
-            # 前端留空 = 保留已存密钥（密钥不回显，表单只能追加/覆盖）
-            sec_new = _token.get_baidu()["secret_key"]
-        r = _token.set_baidu(app_id, sec_new)
-        # 保存后立即重载 fanyi 凭证（无需重启桥接）；fanyi 未 import 则延后到翻译 worker
-        try:
-            import fanyi
-            fanyi.refresh_credentials()
-        except Exception:
-            pass
-        return r
-
-    _bus.register("translate.get_creds", _translate_get_creds)
-    _bus.register("translate.set_creds", _translate_set_creds)
-
-    # ---- 乱码修复 handler（codec.recover）：worker 线程跑外部服务，结果走 codec.recover 事件 ----
-    global _codec_service
-    _codec_service = CodecService(_thread_broadcast)
-
-    async def _codec_recover(payload: dict, _ws) -> dict:
-        # 受理即 ack；结果走 codec.recover 事件（worker 线程跑）
-        _codec_service.recover(str(payload.get("text", "")))
-        return {"accepted": True}
-
-    _bus.register("codec.recover", _codec_recover)
-
-    # ---- AI handler（ai.send / ai.providers）：service 在 worker 线程跑，结果经 _thread_broadcast 回 WS ----
-    global _ai_service
-    _ai_service = AiService(_thread_broadcast)
-
-    async def _ai_send(payload: dict, _ws) -> dict:
-        session = str(payload.get("session") or "s1")
-        provider = str(payload.get("provider") or "")
-        text = str(payload.get("text", ""))
-        msg_id = str(payload.get("msg_id") or uuid.uuid4())
-        # 兜底：provider 为空或已不在配置中（如旧默认 kimi_ai 被删除/改名）→
-        # 自动切到「当前启用模型（use_page!=0）」，否则取排序后第一个模型，
-        # 避免 chat_once 直接报 "AI 模型 xxx 不存在"。
-        cfg = get_ai_config()
-        if provider not in cfg["config"]:
-            provider = next(
-                (m for m in cfg["models"]
-                 if cfg["config"][m].get("use_page") not in (0, None, "")),
-                cfg["models"][0] if cfg["models"] else "",
-            )
-        # 异步受理（worker 线程跑，结果走 ai.result 事件）
-        _ai_service.send(session, provider, text, msg_id)
-        return {"accepted": True, "msg_id": msg_id, "provider": provider}
-
-    async def _ai_providers(payload: dict, _ws) -> dict:
-        # 实时读盘：内置 + 自定义模型都在列（与 ai.get_config 同一数据源，改配置后即时反映）
-        cfg = get_ai_config()
-        return {"providers": cfg["models"]}
-
-    async def _ai_clear_session(payload: dict, _ws) -> dict:
-        session = str(payload.get("session") or "s1")
-        _ai_service.clear(session)
-        return {"ok": True, "session": session}
-
-    # ---- AI 模型配置 handler（ai.get_config / ai.set_config）：读写 config/ai.json（models + history 合存） ----
-    def _ai_cfg_call(fn, *a, **kw):
-        try:
-            return fn(*a, **kw)
-        except AiConfigError as e:
-            raise BridgeError(e.code, e.message)
-
-    async def _ai_get_config(_p, _ws) -> dict:
-        return _ai_cfg_call(get_ai_config)
-
-    async def _ai_set_config(p, _ws) -> dict:
-        r = _ai_cfg_call(set_ai_config,
-                         str(p.get("model", "")),
-                         str(p.get("api", "")),
-                         int(p.get("page_nums", 1) or 1),
-                         p.get("model_two"),
-                         str(p.get("alias", "")),
-                         str(p.get("base_url", "")),
-                         str(p.get("model_id", "")),
-                         str(p.get("kind", "")))
-        await _bus.broadcast("ai.config_changed", r)
-        return r
-
-    async def _ai_add_model(p, _ws) -> dict:
-        r = _ai_cfg_call(add_ai_model,
-                         str(p.get("model", "")),
-                         str(p.get("alias", "")),
-                         str(p.get("kind", "openai")))
-        await _bus.broadcast("ai.config_changed", r)
-        return r
-
-    async def _ai_remove_model(p, _ws) -> dict:
-        r = _ai_cfg_call(remove_ai_model, str(p.get("model", "")))
-        await _bus.broadcast("ai.config_changed", r)
-        return r
-
-    async def _ai_test(p, _ws) -> dict:
-        # 真实网络请求：放 worker 线程跑，避免阻塞事件循环
-        r = await asyncio.to_thread(
-            test_ai,
-            str(p.get("model", "")),
-            str(p.get("api", "")),
-            str(p.get("base_url", "")),
-            str(p.get("model_id", "")),
-            str(p.get("kind", "")),
-            str(p.get("alias", "")),
-        )
-        return r
-
-    async def _ai_get_history(_p, _ws) -> dict:
-        return get_ai_history()
-
-    async def _ai_set_history(p, _ws) -> dict:
-        r = _ai_cfg_call(set_ai_history, int(p.get("rounds", 20) or 20))
-        await _bus.broadcast("ai.config_changed", r)
-        return r
-
-    async def _ai_set_page(p, _ws) -> dict:
-        # 保存「分栏数量」：直接持久化 use_page 布局（pane1/pane2），即时重载
-        r = _ai_cfg_call(set_ai_page,
-                         int(p.get("page_nums", 1) or 1),
-                         str(p.get("model_one", "")),
-                         str(p.get("model_two", "")))
-        await _bus.broadcast("ai.config_changed", r)
-        return r
-
-    _bus.register("ai.send", _ai_send)
-    _bus.register("ai.providers", _ai_providers)
-    _bus.register("ai.clear_session", _ai_clear_session)
-    _bus.register("ai.get_config", _ai_get_config)
-    _bus.register("ai.set_config", _ai_set_config)
-    _bus.register("ai.add_model", _ai_add_model)
-    _bus.register("ai.remove_model", _ai_remove_model)
-    _bus.register("ai.test", _ai_test)
-    _bus.register("ai.get_history", _ai_get_history)
-    _bus.register("ai.set_history", _ai_set_history)
-    _bus.register("ai.set_page", _ai_set_page)
 
     # ---- 工具执行 / 网格（本机执行层，新数据模型：config 菜单/导航/工具）----
     def _tool_call(fn, *a, **kw):
@@ -304,37 +116,6 @@ def _register_builtin_commands() -> None:
 
     _bus.register("tool.run", _tool_run)
     _bus.register("tool.grid", _tool_grid)
-
-    # ---- 本地终端（旧版隐藏的 create_local_cmd 显式化）：shell.run 同步子进程 → worker 线程 ----
-    async def _shell_run(p, _ws) -> dict:
-        session = str(p.get("session") or "local")
-        command = str(p.get("command", ""))
-        timeout = p.get("timeout")
-        return await asyncio.to_thread(shell_service.run, session, command, timeout)
-
-    async def _shell_complete(p, _ws) -> dict:
-        session = str(p.get("session") or "local")
-        prefix = str(p.get("prefix", ""))
-        return shell_service.complete(session, prefix)
-
-    async def _shell_reset(p, _ws) -> dict:
-        session = str(p.get("session") or "local")
-        return shell_service.reset(session)
-
-    async def _shell_shells(p, _ws) -> dict:
-        session = str(p.get("session") or "local")
-        return shell_service.shells(session)
-
-    async def _shell_set_shell(p, _ws) -> dict:
-        session = str(p.get("session") or "local")
-        shell = str(p.get("shell", "cmd"))
-        return shell_service.set_shell(session, shell)
-
-    _bus.register("shell.run", _shell_run)
-    _bus.register("shell.complete", _shell_complete)
-    _bus.register("shell.reset", _shell_reset)
-    _bus.register("shell.shells", _shell_shells)
-    _bus.register("shell.set_shell", _shell_set_shell)
 
     # ---- 菜单/导航/工具 CRUD（同步文件操作，MenuError → BridgeError）----
     def _menu_call(fn, *a, **kw):
@@ -572,60 +353,6 @@ def _register_builtin_commands() -> None:
     _bus.register("window.drag_begin", _window_drag_begin)
     _bus.register("window.drag_end", _window_drag_end)
 
-    # ---- SSH 终端（config/ssh_hosts.json 主机表 + 常驻 paramiko 会话；会话断开广播 ssh.closed）----
-    def _ssh_call(fn, *a, **kw):
-        try:
-            return fn(*a, **kw)
-        except ssh_service.SSHServiceError as e:
-            raise BridgeError(e.code, e.message)
-
-    async def _ssh_hosts_get(p, _ws):
-        try:
-            return ssh_service.get_hosts()
-        except ssh_service.SSHServiceError as e:
-            raise BridgeError(e.code, e.message)
-
-    async def _ssh_hosts_save(p, _ws):
-        r = _ssh_call(ssh_service.save_hosts, p.get("hosts"))
-        await _bus.broadcast("ssh.hosts.changed", {"hosts": r["hosts"]})
-        return r
-
-    async def _ssh_connect(p, _ws):
-        # 阻塞网络连接（至多 ~3×15s）→ worker 线程，避免卡死整个 WS 事件循环（同 shell.run 的处理）
-        alias = str(p.get("alias", ""))
-        try:
-            r = await asyncio.to_thread(ssh_service.connect, alias)
-        except ssh_service.SSHServiceError as e:
-            raise BridgeError(e.code, e.message)
-        await _bus.broadcast("ssh.connected", r)
-        return r
-
-    async def _ssh_run(p, _ws):
-        alias = str(p.get("alias", ""))
-        try:
-            return await asyncio.to_thread(
-                ssh_service.run, alias, str(p.get("command", "")), p.get("timeout"))
-        except ssh_service.SSHServiceError as e:
-            if e.code == "SSH_SESSION_LOST":
-                await _bus.broadcast("ssh.closed", {"alias": alias, "reason": e.message})
-            raise BridgeError(e.code, e.message)
-
-    async def _ssh_close(p, _ws):
-        alias = str(p.get("alias", ""))
-        r = _ssh_call(ssh_service.close, alias)
-        await _bus.broadcast("ssh.closed", {"alias": alias})
-        return r
-
-    async def _ssh_status(p, _ws):
-        return ssh_service.status()
-
-    _bus.register("ssh.hosts.get", _ssh_hosts_get)
-    _bus.register("ssh.hosts.save", _ssh_hosts_save)
-    _bus.register("ssh.connect", _ssh_connect)
-    _bus.register("ssh.run", _ssh_run)
-    _bus.register("ssh.close", _ssh_close)
-    _bus.register("ssh.status", _ssh_status)
-
 
 def build_app() -> FastAPI:
     @asynccontextmanager
@@ -636,7 +363,7 @@ def build_app() -> FastAPI:
         _bridge_loop = asyncio.get_running_loop()
         yield
 
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.1.1", lifespan=_lifespan)
+    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.1.3", lifespan=_lifespan)
     _token_mod.get_token()  # 确保 token 已生成
 
     @app.get("/api/ping")

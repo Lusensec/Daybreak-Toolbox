@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.1.1"
+APP_VERSION = "2.1.3"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -132,6 +132,23 @@ def check_update(repo: str) -> dict:
     }
 
 _VERSIONS = {
+    "v2.1.3":
+"""
+功能瘦身：移除系统固定菜单栏及其全部内置面板，工具箱回归「可配置菜单 + 一键启动本机工具」：
+1、删除五个固定功能面板：AI 对话 / 终端管理 / 编解码 / 汉英翻译 / 临时笔记（页面、路由、子窗口内容、首页与托盘入口一并移除），顶栏固定菜单只剩「首页」
+2、工具箱设置同步精简：移除 AI模型设置 / 翻译设置 / 终端设置 三个页签
+3、后端删除 ai_service / ai_config / translate_service / codec_service / shell_service / ssh_service 及 fanyi.py / encryption.py，WebSocket 命令 66 → 39 条
+4、依赖收敛：移除 openai / requests / beautifulsoup4 / zhipuai / paramiko，安装包进一步变小
+5、快捷键槽位去掉「固定菜单栏」分组（回到面板 / 动态菜单 / 导航 / 工具 不受影响）
+""",
+    "v2.1.2":
+"""
+顶栏拖拽修复 + 安装包瘦身（体积 67.6MB → 54.6MB，约 −19%）：
+1、修复「在主内容区（如临时笔记）滑动鼠标就把整个窗口带走」：顶栏拖拽的全局监听器此前只在 mouseup 里拆除，一旦 mouseup 丢失（窗口外松手 / pointercancel / 失焦 / 切后台）就会永久残留，之后在笔记区任何滑动都被算作「继续拖窗口」。现在拆除逻辑幂等化，并补 pointercancel / blur / visibilitychange 兜底，且移动时检测到左键已松开立即拆除
+2、顶栏拖拽热区收窄：菜单按钮行与右侧控件行整块不再参与窗口拖动（此前按钮之间的 flex 间隙也放行，想点菜单常点进缝里变成拖窗口），仅品牌区与真空白可拖
+3、安装包瘦身：移除 dashscope / chardet / pycryptodome 三个零引用依赖，排除 Pillow 用不到的 AVIF、FreeType、WebP 编解码插件（12.8MB → 2.8MB），logo 由 1024px 压到 128px（2.0MB → 55KB）
+4、修复 SSH 终端在官方安装包中不可用：paramiko 此前从未进入依赖清单，打包后静默降级为「未安装」；已补入并验证打包完整
+""",
     "v2.1.1":
 """
 启动性能优化（双击到界面可用 5.0s → 约 3.0s，同机实测）：

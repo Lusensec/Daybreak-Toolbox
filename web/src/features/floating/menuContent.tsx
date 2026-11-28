@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Package, Plus, Loader2 } from "lucide-react";
 import { sendCommand } from "../../services/ws";
@@ -11,20 +11,9 @@ import { HomePage } from "../../pages/HomePage";
 import "../../pages/ToolCanvas.css";
 
 /** 固定系统菜单 → 页面组件（与 App.tsx 路由表一一对应；全局单例状态多窗共享，用户已确认）。
- *  非首页各页懒加载：与 App 路由复用同一 chunk，主包不携带各页面的私有依赖 */
-const AiChatLazy = lazy(() => import("../ai/AiChat").then((m) => ({ default: m.AiChat })));
-const TranslateLazy = lazy(() => import("../translate/TranslatePanel").then((m) => ({ default: m.TranslatePanel })));
-const CodecLazy = lazy(() => import("../codec/CodecPanel").then((m) => ({ default: m.CodecPanel })));
-const ShellLazy = lazy(() => import("../shell/ShellPanel").then((m) => ({ default: m.ShellPanel })));
-const NoteLazy = lazy(() => import("../note/NoteEditor").then((m) => ({ default: m.NoteEditor })));
-
+ *  v2.1.3：AI 对话 / 终端管理 / 编解码 / 汉英翻译 / 临时笔记 已移除，固定菜单只剩「首页」。 */
 const FIXED_CONTENT: Record<string, React.ComponentType> = {
   首页: HomePage,
-  "AI 对话": AiChatLazy,
-  汉英翻译: TranslateLazy,
-  编解码: CodecLazy,
-  终端管理: ShellLazy,
-  临时笔记: NoteLazy,
 };
 
 /** 懒块占位（子窗口内）：加载完成前显示一行提示 */

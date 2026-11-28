@@ -1,4 +1,7 @@
-"""bridge/token.py 单测：密钥文件惰性生成/迁移/原子写/并发读改写（set_root 无关，monkeypatch 模块级路径隔离）。"""
+"""bridge/token.py 单测：密钥文件惰性生成/迁移/原子写/并发读改写。
+
+v2.1.3：翻译功能移除后百度凭证段（get_baidu/set_baidu）已删除，对应测试一并移除。
+"""
 from __future__ import annotations
 
 import json
@@ -14,10 +17,9 @@ import bridge.token as token_mod  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
-    """把 3 个文件路径指到临时目录（旧文件不存在 → 迁移分支为 no-op），并清空 token 缓存。"""
+    """把密钥文件路径指到临时目录（旧文件不存在 → 迁移分支为 no-op），并清空 token 缓存。"""
     monkeypatch.setattr(token_mod, "_SECRETS_FILE", tmp_path / "config" / "bridge_secrets.json")
     monkeypatch.setattr(token_mod, "_LEGACY_TOKEN_FILE", tmp_path / "config" / "bridge_token.json")
-    monkeypatch.setattr(token_mod, "_LEGACY_BAIDU_PY", tmp_path / "config" / "baidu.py")
     token_mod._TOKEN["value"] = ""
     yield
 
@@ -50,37 +52,11 @@ def test_corrupt_secrets_file_recovers_without_crash():
     json.loads(token_mod._SECRETS_FILE.read_text(encoding="utf-8"))
 
 
-def test_baidu_roundtrip_preserves_token():
-    tok = token_mod.get_token()
-    r = token_mod.set_baidu("appid-x", "secret-y")
-    assert r["ok"] and r["secret_key_configured"] is True
-    assert token_mod.get_baidu() == {"app_id": "appid-x", "secret_key": "secret-y"}
+def test_legacy_token_file_migrated():
+    """旧 config/bridge_token.json 的 token 惰性并入统一密钥文件。"""
+    legacy = token_mod._LEGACY_TOKEN_FILE
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps({"token": "legacy-token-abc"}), encoding="utf-8")
+    assert token_mod.get_token() == "legacy-token-abc"
     data = json.loads(token_mod._SECRETS_FILE.read_text(encoding="utf-8"))
-    assert data["token"] == tok  # token 字段保留
-    # 清空 secret（app_id 保留）
-    r2 = token_mod.set_baidu("appid-x", "")
-    assert r2["secret_key_configured"] is False
-    assert token_mod.get_baidu() == {"app_id": "appid-x", "secret_key": ""}
-
-
-def test_baidu_concurrent_read_modify_write_no_crash():
-    """并发 get/set_baidu（读-改-写有锁 + 原子写）：无异常、无撕裂 JSON。"""
-    import threading
-    errors: list = []
-
-    def worker(i: int) -> None:
-        try:
-            for j in range(20):
-                token_mod.set_baidu(f"app-{i}-{j}", f"sec-{i}-{j}")
-                token_mod.get_baidu()
-        except Exception as e:  # noqa: BLE001
-            errors.append(e)
-
-    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert not errors, errors
-    # 最终文件必须是合法 JSON（原子写保证）
-    json.loads(token_mod._SECRETS_FILE.read_text(encoding="utf-8"))
+    assert data["token"] == "legacy-token-abc"

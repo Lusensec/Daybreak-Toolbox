@@ -74,7 +74,7 @@ python -m bridge.smoke
 
 ![首页](images/home.png)
 
-顶栏：动态菜单栏（色点区分，**拖拽排序**，把某个菜单**拖出顶栏**即成为独立子窗口）+ 固定功能菜单 + 主题切换（浅色/深色/跟随系统）+ 工具箱设置。
+顶栏：动态菜单栏（色点区分，**拖拽排序**，把某个菜单**拖出顶栏**即成为独立子窗口）+ 首页入口 + 主题切换（浅色/深色/跟随系统）+ 工具箱设置。
 
 # 四、核心功能
 
@@ -103,72 +103,51 @@ python -m bridge.smoke
 
 ![菜单子窗口](images/floating.png)
 
-## 3、AI 对话模型
-
-支持 OpenAI 兼容协议（Kimi / 通义千问 / DeepSeek / 自定义 API）、智谱、Ollama 本地模型；可配置分栏（单栏/双栏对比）与历史轮数（10–100），保存即时生效无需重启。
-
-配置入口：工具箱设置 → AI模型设置（别名必填，可增删自定义模型，内置连接测试）。
-
-![AI模型设置](images/settings_ai.png)
-
-![AI 对话](images/ai_chat.png)
-
-## 4、汉英翻译（百度翻译）
-
-内置翻译服务（自动判断中英方向）。认证信息在「工具箱设置 → 翻译设置」中填写并保存（存于 `config/bridge_secrets.json`，保存即生效，无需重启）：
-
-![翻译设置](images/settings_translate.png)
-
-- appid / 密钥：在[百度翻译开放平台](https://fanyi-api.baidu.com/)申请
-- 「测试翻译」按钮会真实调用一次接口验证可用性
-
-![汉英翻译](images/translate.png)
-
-## 5、编解码
-
-Base64 / URL / Unicode / JSON / MD5 / 乱码恢复。
-
-![编解码](images/codec.png)
-
-## 6、本地终端
-
-本机命令执行（非交互式）：内置 `cd / ls / pwd / clear / exit`，其它命令走系统 shell；支持 Tab 补全、↑↓ 历史、命令分块 + 分隔线。
-
-**终端类型**：工具栏下拉框可切换 `cmd / PowerShell / pwsh`（按系统实际可用项探测），切换即时生效。
-
-![本地终端](images/shell.png)
-
-## 7、临时笔记
-
-本地保存的工作笔记（自动存到浏览器 localStorage），支持搜索/替换（Ctrl+F / Ctrl-H）。
-
-![临时笔记](images/note.png)
-
-## 8、快捷键 / 更新检查
+## 3、快捷键 / 更新检查
 
 - **快捷键**（设置 → 快捷键设置）：支持**任意键**（可不带 Ctrl，如 `K`、`F5`、`空格` 或带修饰键的组合）。
 - **更新检查**（设置 → 更新检查）：对比本地版本与 GitHub 仓库 latest Release，展示更新记录。
+
+> v2.1.3 起，原「AI 对话 / 汉英翻译 / 编解码 / 本地终端 / 临时笔记」五个内置面板已整体移除，
+> 工具箱回到纯「可配置菜单 + 一键启动本机工具」的定位。
 
 # 五、配置文件
 
 | 文件 | 内容 | 是否随仓库 |
 | --- | --- | --- |
 | `config/config.json` | 菜单栏 / 导航栏 / 工具 定义（核心数据） | 是（含你的工具） |
-| `config/ai.json` | AI 模型配置 + 历史轮数（含 API key） | 否（gitignore） |
-| `config/bridge_secrets.json` | 桥接 token + 百度翻译凭证（合并单文件） | 否（gitignore） |
-| `config/ssh_hosts.json` | SSH 主机表（含明文密码） | 否（gitignore，严禁随仓库分发） |
+| `config/bridge_secrets.json` | 桥接 token（单文件） | 否（gitignore） |
 | `config/shortcuts.json` | 全局快捷键组合（个人偏好） | 否（gitignore，缺省用内置默认） |
 
 **自动迁移**：首次启动会把旧版文件合并进新结构，之后旧文件即可安全删除——
-`ai_ask.json` + `ai_history.json` → `ai.json`；`bridge_token.json` + `baidu.py` → `bridge_secrets.json`。
+`bridge_token.json` → `bridge_secrets.json`。
 
 # 六、安全说明
 
 - 桥接服务**仅监听 127.0.0.1**，不对外暴露；WS/REST 均需随机 token（启动时自动生成并持久化）
-- 所有密钥（AI API key、百度凭证、桥接 token）只存本地 gitignored 文件，不进仓库
+- 所有密钥（桥接 token）只存本地 gitignored 文件，不进仓库
 - 工具箱本身是学习研究工具，请仅对你有权限的系统使用
 
 # 七、更新记录
+
+## v2.1.3
+
+功能瘦身：移除系统固定菜单栏及其全部内置面板，工具箱回归「可配置菜单 + 一键启动本机工具」。
+
+1、删除五个固定功能面板：**AI 对话 / 终端管理 / 编解码 / 汉英翻译 / 临时笔记**（前端页面、路由、子窗口内容、首页与托盘入口一并移除），顶栏固定菜单只剩「首页」
+2、工具箱设置同步精简：移除「AI模型设置 / 翻译设置 / 终端设置」三个页签，仅保留 通用设置 / 菜单栏管理 / 导航栏管理 / 工具管理 / 菜单栏展示 / 快捷键设置 / 更新检查
+3、后端删除对应服务与命令：`ai_service` / `ai_config` / `translate_service` / `codec_service` / `shell_service` / `ssh_service` 及根目录 `fanyi.py` / `encryption.py`，WebSocket 命令从 66 条降到 39 条；百度翻译凭证段与 `config/ai.json`、`ssh_hosts.json` 相关逻辑清空
+4、依赖随之收敛：移除 `openai` / `requests` / `beautifulsoup4` / `zhipuai` / `paramiko`，安装包进一步变小
+5、快捷键槽位去掉「固定菜单栏」分组（导航 / 动态菜单 / 工具 / 回到面板 不受影响）
+
+## v2.1.2
+
+顶栏拖拽修复 + 安装包瘦身（产物 67.6MB → 54.6MB，约 **−19%**）。
+
+1、修复「在主内容区（如临时笔记）滑动鼠标就把整个窗口带走」：顶栏拖拽的全局监听器此前只在 `mouseup` 里拆除，一旦 `mouseup` 丢失（窗口外松手 / `pointercancel` / 失焦 / 切后台）就会永久残留，之后在笔记区任何滑动都被算成「继续拖窗口」。现在拆除逻辑幂等化，补 `pointercancel` / `blur` / `visibilitychange` 兜底，且移动时检测到左键已松开立即拆除
+2、顶栏拖拽热区收窄：菜单按钮行与右侧控件行整块不再参与窗口拖动（此前按钮之间的 flex 间隙也放行，想点菜单常点进缝里变成拖窗口），仅品牌区与真空白可拖
+3、安装包瘦身：移除 `dashscope` / `chardet` / `pycryptodome` 三个零引用依赖；排除 Pillow 用不到的 AVIF、FreeType、WebP 编解码插件（12.8MB → 2.8MB）；logo 由 1024px 压到 128px（2.0MB → 55KB，显示尺寸仅 32px）
+4、修复 SSH 终端在官方安装包中不可用：`paramiko` 此前从未进入依赖清单，打包后静默降级为「未安装」；已补入 `requirements.txt` 并验证打包完整
 
 ## v2.1.1
 

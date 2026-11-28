@@ -21,7 +21,7 @@ export const slotNav = (n: number) => `nav:${n}`;
 export const slotTool = (menu: string, tool: string) => `tool:${menu}__${tool}`;
 
 /** 固定菜单栏参与快捷键的菜单：「首页」不配快捷键（「回到面板」槽位即可到达，无需独占组合键）。
- *  默认编号按本列表 1..N 生成（AI 对话=Ctrl+Alt+1 … 临时笔记=Ctrl+Alt+5）。 */
+ *  v2.1.3：五个固定功能面板已移除，固定菜单只剩「首页」→ 本列表为空，fix: 槽位不再产生默认组合。 */
 export const SHORTCUT_FIX_MENUS = FIXED_MENUS.filter((n) => n !== "首页");
 
 /** 工具槽（tool:<菜单>__<工具>）默认组合：按工具列表顺序（从左到右、从上到下）Ctrl+Alt+1、2、3… */

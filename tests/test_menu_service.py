@@ -228,25 +228,11 @@ class MenuServiceTest(unittest.TestCase):
     def test_set_fixed_visible(self):
         ms.set_fixed_visible("首页", False)
         self.assertEqual(ms.list_fixed_visible().get("首页"), 0)
-        ms.set_fixed_visible("AI 对话", True)
-        self.assertEqual(ms.list_fixed_visible().get("AI 对话"), 1)
+        # 显隐表对任意名称都可写（v2.1.3：固定功能面板已移除，只剩「首页」实际参与渲染）
+        ms.set_fixed_visible("任意名称", True)
+        self.assertEqual(ms.list_fixed_visible().get("任意名称"), 1)
         # 保留键不影响菜单列表
         self.assertEqual([m["name"] for m in ms.list_menus()], ["Windows红队工具箱"])
-
-    def test_fixed_rename_migrate_本地终端_to_终端管理(self):
-        # 旧版显隐表可能残留「本地终端」键：load_config 时一次性平移到「终端管理」（幂等）
-        ms.set_fixed_visible("本地终端", False)
-        cfg_path = os.path.join(self.root, "config", "config.json")
-        with open(cfg_path, encoding="utf-8") as f:
-            raw = json.load(f)
-        self.assertEqual(raw.get("__fixed_menu_visible__", {}).get("本地终端"), 0)
-        table = ms.list_fixed_visible()
-        self.assertIsNone(table.get("本地终端"), "旧键应被迁移掉")
-        self.assertEqual(table.get("终端管理"), 0, "显隐值应平移到新键")
-        # 幂等：再读一次不变
-        with open(cfg_path, encoding="utf-8") as f:
-            raw2 = json.load(f)
-        self.assertNotIn("本地终端", raw2.get("__fixed_menu_visible__", {}))
 
 
 class MigrationTest(unittest.TestCase):

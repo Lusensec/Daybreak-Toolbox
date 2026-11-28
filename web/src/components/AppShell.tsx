@@ -15,19 +15,9 @@ import { useDetachDrag } from "../features/floating/useDetachDrag";
 import { FloatingWindowHost } from "../features/floating/FloatingWindow";
 import { GlobalShortcuts } from "../features/shortcuts/GlobalShortcuts";
 import { bindShortcutEvents } from "../features/shortcuts/store";
-import { bindSshEvents } from "../features/ssh/store";
 import "./AppShell.css";
 
-const NAV = [
-  { to: "/", label: "首页", end: true },
-  { to: "/ai", label: "AI 对话" },
-  { to: "/shell", label: "终端管理" },
-  { to: "/codec", label: "编解码" },
-  { to: "/translate", label: "汉英翻译" },
-  { to: "/note", label: "临时笔记" },
-];
-
-/** 工具箱设置模态框懒加载（设置 UI 较重：10 个标签页 + 表单/列表；仅在打开时才需要） */
+/** 工具箱设置模态框懒加载（设置 UI 较重：多个标签页 + 表单/列表；仅在打开时才需要） */
 const SettingsModalLazy = lazy(() => import("./SettingsModal").then((m) => ({ default: m.SettingsModal })));
 
 // bridge 自托管生产模式：同源部署（pnpm build 后由 python -m bridge.main 托管）。
@@ -106,12 +96,17 @@ export default function AppShell() {
   // v2.0.18：品牌区版本号（app.env → version；服务形态/旧桥接无该字段时不渲染）
   const [appVersion, setAppVersion] = useState<string | null>(null);
 
-  /** 顶栏非交互目标判定：按钮/链接/输入控件/可脱离项/图片 不参与拖移（品牌区空白、栏间隙可拖）。
+  /** 顶栏非交互目标判定：按钮/链接/输入控件/可脱离项/图片 不参与拖移。
    *  v2.0.20：显式排除 img —— <img> 默认可原生拖拽（draggable IDL=true 但无属性，
-   *  `[draggable='true']` 选择器匹配不到），原生图片拖拽会吞掉 mouseup，窗口卡在拖拽态。 */
+   *  `[draggable='true']` 选择器匹配不到），原生图片拖拽会吞掉 mouseup，窗口卡在拖拽态。
+   *  v2.1.2：收窄热区 —— 菜单按钮行（.menu-nav）与右侧控件行（.menu-bar-right）整块排除。
+   *  这两行是 flex 容器，按钮之间的 gap 空白其 target 就是容器本身，旧判定会放行，
+   *  导致「想点菜单却点进缝里 → 整个窗口被拖走」。现在只有品牌区与它们的真空白可拖。 */
   function isHeaderDragTarget(t: EventTarget | null): boolean {
     if (!(t instanceof HTMLElement)) return false;
-    return !t.closest("button, a, input, select, textarea, img, [draggable='true']");
+    if (t.closest("button, a, input, select, textarea, img, [draggable='true']")) return false;
+    if (t.closest(".menu-nav, .menu-bar-right")) return false;
+    return true;
   }
 
   /** 顶栏拖拽移动窗口：mousedown 取一次窗口基准 rect → mousemove rAF 节流 window.move（DIP 增量）。
@@ -123,6 +118,11 @@ export default function AppShell() {
   const geoInFlight = useRef(0);
   const geoRtt = useRef(8);       // 最近 RTT 的指数移动平均（ms）
   const geoLastSent = useRef(0);  // 上一帧发出时刻（performance.now()）
+  /** v2.1.2：当前顶栏拖拽的拆除句柄。
+   *  旧版只在 mouseup 里置 active=false 并摘监听器——一旦 mouseup 丢失（窗口外松手 /
+   *  触发 pointercancel / 窗口失焦 / 切后台），监听器与 active 状态会永久残留，
+   *  此后在主内容区（如临时笔记）随便划鼠标都会被算成「继续拖窗口」。 */
+  const dragTeardown = useRef<(() => void) | null>(null);
   function sendGeo(payload: { x: number; y: number }) {
     if (geoInFlight.current > 0) return;
     const now = performance.now();
@@ -141,6 +141,8 @@ export default function AppShell() {
 
   function onHeaderDragStart(e: React.MouseEvent) {
     if (!windowed || e.button !== 0 || !isHeaderDragTarget(e.target)) return;
+    // v2.1.2：开新拖拽前先拆掉上一轮残留（上一轮 mouseup 可能从未到达）
+    dragTeardown.current?.();
     void (async () => {
       try {
         const r = (await sendCommand("window.get_rect", {})) as { rect?: { x: number; y: number; width: number; height: number } | null };
@@ -150,9 +152,26 @@ export default function AppShell() {
         let moved = false;   // 超过阈值才进入拖拽（单击/点 logo 不发命令、不进入拖拽态）
         let queued = false;
         let lx = e.screenX, ly = e.screenY;
+
+        /** 幂等拆除：状态复位 + 摘掉全部监听器（含丢失 mouseup 的兜底路径） */
+        const teardown = () => {
+          if (!d.active) return;
+          d.active = false;
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+          window.removeEventListener("pointercancel", teardown);
+          window.removeEventListener("blur", teardown);
+          document.removeEventListener("visibilitychange", onVisibility);
+          dragTeardown.current = null;
+        };
+        const onVisibility = () => { if (document.hidden) teardown(); };
+
         const onMove = (ev: MouseEvent) => {
           lx = ev.screenX; ly = ev.screenY;
           if (!d.active) return;
+          // v2.1.2：左键已松开（mouseup 丢失的情形）→ 立刻拆除，
+          // 杜绝「不按鼠标在主内容区滑动就把窗口带走」
+          if (ev.buttons === 0) { teardown(); return; }
           if (!moved && Math.abs(lx - d.sx) < DRAG_THRESHOLD && Math.abs(ly - d.sy) < DRAG_THRESHOLD) return;
           moved = true;
           if (queued) return;
@@ -164,16 +183,23 @@ export default function AppShell() {
           });
         };
         const onUp = () => {
-          d.active = false;
-          window.removeEventListener("mousemove", onMove);
-          window.removeEventListener("mouseup", onUp);
+          const wasActive = d.active;
+          const nx = d.ox + (lx - d.sx);
+          const ny = d.oy + (ly - d.sy);
+          const didMove = moved;
+          teardown();
           // 补发最终位置（节流可能跳过最后一帧）→ 窗口精确停在光标处；单击则完全不动
-          if (moved) {
-            void sendCommand("window.move", { x: d.ox + (lx - d.sx), y: d.oy + (ly - d.sy) }).catch(() => {});
+          if (wasActive && didMove) {
+            void sendCommand("window.move", { x: nx, y: ny }).catch(() => {});
           }
         };
+
+        dragTeardown.current = teardown;
         window.addEventListener("mousemove", onMove);
         window.addEventListener("mouseup", onUp);
+        window.addEventListener("pointercancel", teardown);
+        window.addEventListener("blur", teardown);
+        document.addEventListener("visibilitychange", onVisibility);
       } catch { /* 桥接未就绪：不拖 */ }
     })();
   }
@@ -205,6 +231,9 @@ export default function AppShell() {
       toast.err(`操作失败：${e instanceof Error ? e.message : e}`);
     }
   }
+
+  // v2.1.2：卸载时拆掉可能残留的顶栏拖拽监听（热重载/路由卸载也不留僵尸）
+  useEffect(() => () => { dragTeardown.current?.(); }, []);
 
   // v2.0.17：窗体背景色随主题同步（下边框拉伸时 WebView2 渲染间隙露出的条带与页面同色，
   // 白闪不可见；颜色取自 theme/tokens.css 的 --bg）
@@ -255,8 +284,6 @@ export default function AppShell() {
     bindMenuEvents();
     // 快捷键表：首次加载 + 订阅 shortcut.changed（即时生效）
     bindShortcutEvents();
-    // SSH 主机表：首次加载 + 订阅 ssh.hosts.changed / ssh.closed（终端设置改主机后下拉框即时同步）
-    bindSshEvents();
     // 窗口形态探测：无边框窗口（frameless）才渲染 最大化/关闭X/拖移/拉伸 控件（浏览器/服务形态隐藏）
     sendCommand("app.env", {})
       .then((r) => {
@@ -329,28 +356,18 @@ export default function AppShell() {
           </div>
         </div>
         <nav className="menu-nav" ref={menuNavRef}>
-          {/* 顺序：首页 → 动态加载的用户菜单 → 固定功能面板（均按 菜单栏展示 参数 1/0 显隐；可拖出顶栏脱离为子窗口） */}
+          {/* 顺序：首页 → 动态加载的用户菜单（均按 菜单栏展示 参数 1/0 显隐；可拖出顶栏脱离为子窗口）。
+              v2.1.3：AI 对话 / 终端管理 / 编解码 / 汉英翻译 / 临时笔记 已移除，固定菜单只剩首页 */}
           {isFixedVisible(fixedVisible, "首页") ? (
             <FixedNavButton
               to="/"
               label="首页"
+              end
               barRef={topBarRef}
               onCtx={(e, name) => setFixedCtx({ x: e.clientX, y: e.clientY, target: { kind: "menu", name } })}
             />
           ) : null}
           <DynamicMenuNav barRef={topBarRef} />
-          {NAV.slice(1)
-            .filter((item) => isFixedVisible(fixedVisible, item.label))
-            .map((item) => (
-              <FixedNavButton
-                key={item.to}
-                to={item.to}
-                label={item.label}
-                end={item.end}
-                barRef={topBarRef}
-                onCtx={(e, name) => setFixedCtx({ x: e.clientX, y: e.clientY, target: { kind: "menu", name } })}
-              />
-            ))}
           {fixedCtx ? (
             <CtxMenu
               state={fixedCtx}

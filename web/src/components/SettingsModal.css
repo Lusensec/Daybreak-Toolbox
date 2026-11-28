@@ -179,61 +179,6 @@
 }
 .form-field select:disabled { opacity: 0.5; }
 
-/* 密钥输入：掩码/明文回显（默认 * 号）+ 右侧小眼睛切换（聚焦自动明文，方便编辑） */
-.secret-input {
-  position: relative;
-  display: flex;
-  align-items: center;
-  /* 不设 flex-grow：父级 .form-field 是纵向 flex，grow 会垂直撑开出大空隙（输入框被顶到底部） */
-  width: 100%;
-}
-.secret-input__field {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 7px 32px 7px 10px;   /* 右侧预留小眼睛位置 */
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--entry-bg);
-  color: var(--text);
-  font-size: 13px;
-  font-family: var(--font-mono);
-  width: auto;
-}
-.secret-input__field::placeholder { font-family: var(--font-ui); color: var(--muted); }
-.secret-input__eye {
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-.secret-input__eye:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-
-/* ---- AI 模型设置标签页 ---- */
-.settings-ai {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  /* 撑满内容区，让「保存」页脚贴到右下角（内容不足一屏时） */
-  min-height: 100%;
-}
-.settings-ai .settings-sub__title { margin: 0 0 2px; }
-/* 右下角保存页脚 */
-.settings-ai-footer {
-  margin-top: auto;
-  display: flex;
-  justify-content: flex-end;
-}
-
 /* ---- 导航栏管理标签页 ---- */
 .settings-nav {
   display: flex;
@@ -665,53 +610,6 @@
   padding: 2px 4px;
 }
 .key-capture__restore:hover { text-decoration: underline; }
-
-/* ================= 终端设置（SSH 主机列表：一行一台，增删改 + 整表保存） ================= */
-.settings-terminal { display: flex; flex-direction: column; gap: 10px; }
-.settings-terminal .tools-subhead { justify-content: space-between; }
-.ssh-host-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--entry-bg);
-}
-.ssh-host-row__grid {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(110px, 140px) minmax(140px, 1fr) minmax(70px, 90px) minmax(100px, 140px) minmax(140px, 1fr);
-  gap: 10px;
-}
-.ssh-host-row__pw { min-width: 0; }
-.ssh-host-row .form-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.ssh-host-row .form-field input {
-  width: 100%;
-  min-width: 0;
-  padding: 6px 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 12.5px;
-  font-family: var(--font-ui);
-  box-sizing: border-box;
-}
-.ssh-host-row .form-field input:focus { border-color: var(--accent); outline: none; }
-.ssh-host-row__del {
-  flex: 0 0 auto;
-  width: 30px; height: 30px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.ssh-host-row__del:hover:not(:disabled) { color: var(--error, #e5484d); border-color: var(--error, #e5484d); }
-.ssh-host-row__del:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ================= 更新设置（检查更新 + 介绍/点赞 + 版本记录） ================= */
 .settings-update { display: flex; flex-direction: column; gap: 12px; }

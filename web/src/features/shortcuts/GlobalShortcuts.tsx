@@ -8,10 +8,10 @@ import { useSettingsModal } from "../../store/settingsModal";
 import { useShortcutsStore } from "./store";
 import { allSlots, effectiveCombo, eventCombo, SLOT_PANEL, toolDefaults } from "./shortcuts";
 
-/** 系统固定菜单栏 → 路由（与 App.tsx 一致） */
+/** 系统固定菜单栏 → 路由（与 App.tsx 一致）。v2.1.3：固定菜单只剩「首页」，
+ *  其余固定功能面板（AI 对话 / 终端管理 / 编解码 / 汉英翻译 / 临时笔记）已移除。 */
 const FIX_ROUTES: Record<string, string> = {
-  "首页": "/", "AI 对话": "/ai", "汉英翻译": "/translate",
-  "编解码": "/codec", "终端管理": "/shell", "临时笔记": "/note",
+  "首页": "/",
 };
 
 /**
@@ -19,7 +19,7 @@ const FIX_ROUTES: Record<string, string> = {
  *
  * 匹配规则：keydown → 组合串（任意键或组合，须含普通键）→ 与「生效槽位表」逐一比对（已存值优先于默认）。
  * 抑制场景（不触发）：
- *  - 焦点在输入控件（input/textarea/select/contenteditable）或终端（.xterm）——打字不抢键
+ *  - 焦点在输入控件（input/textarea/select/contenteditable）——打字不抢键
  *  - 设置模态框打开——正在改快捷键时不触发导航（录键在模态框内自行处理）
  * 浏览器提示：Ctrl+数字 在浏览器标签页模式会被浏览器切标签拦截（独立窗口 / 桌面应用模式无此问题）。
  */
@@ -32,7 +32,6 @@ export function GlobalShortcuts() {
       const t = e.target as HTMLElement | null;
       if (t) {
         if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable) return;
-        if (t.closest?.(".xterm")) return; // 终端内打字不抢键
       }
       const combo = eventCombo(e);
       if (!combo) return;

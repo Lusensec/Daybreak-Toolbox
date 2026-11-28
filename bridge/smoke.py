@@ -21,7 +21,7 @@ except ImportError:
 
 
 API_BASE = "http://127.0.0.1:8765"
-# 统一密钥文件（bridge token 与 baidu 凭证同存）；兼容旧 bridge_token.json
+# 统一密钥文件（bridge token）；兼容旧 bridge_token.json
 from bridge import token as _token_mod  # noqa: E402
 
 TOKEN_FILE = _token_mod._SECRETS_FILE

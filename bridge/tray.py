@@ -1,8 +1,9 @@
-"""桌面托盘图标（Windows）：常驻任务栏，右键菜单快速打开工具箱各页面。
+"""桌面托盘图标（Windows）：常驻任务栏，右键菜单快速打开工具箱。
 
 设计取舍：
   - 用 pystray（原生托盘）+ Pillow 程序化生成图标，不依赖 ico 资源文件；
-  - 菜单项 = 5 个固定页面（webbrowser 打开 127.0.0.1:<port>/<path>，SPA 兜底路由由 bridge 静态层处理）；
+  - v2.1.3：系统固定功能面板（AI 对话 / 终端管理 / 编解码 / 汉英翻译 / 临时笔记）已移除，
+    托盘菜单只保留「打开首页」与「退出」；
   - 线程以 daemon 方式跑：bridge 进程退出时托盘自动消失，无孤儿图标；
   - 无 pystray / 非 Windows / DAYBREAK_NO_TRAY=1 → 静默跳过，不影响 bridge 本体。
 """
@@ -21,11 +22,6 @@ log = logging.getLogger("bridge.tray")
 # 托盘菜单：（显示名, SPA 路由路径）
 _TRAY_PAGES = [
     ("打开首页", "/"),
-    ("AI 对话", "/ai"),
-    ("终端管理", "/shell"),
-    ("编解码", "/codec"),
-    ("汉英翻译", "/translate"),
-    ("临时笔记", "/note"),
 ]
 
 

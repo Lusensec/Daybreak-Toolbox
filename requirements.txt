@@ -1,15 +1,16 @@
-openai
 fastapi
 uvicorn[standard]
 websockets
-requests
-chardet
-pycryptodome
-beautifulsoup4
-dashscope
-zhipuai
 pystray
 pywebview
 Pillow
-# Windows 悬浮球原生渲染（pywin32 仅 Windows 安装；CI 各平台 runner 按标记处理）
+# Windows 托盘图标渲染（pywin32 仅 Windows 安装；CI 各平台 runner 按标记处理）
 pywin32; sys_platform == "win32"
+
+# 已移除（v2.1.3 功能瘦身：AI 对话 / 终端管理 / 编解码 / 汉英翻译 / 临时笔记 五个面板整体删除）：
+#   openai         —— 仅 ai_service.py 使用
+#   requests       —— 仅 ai_config.py / fanyi.py / encryption.py 使用（update_service 走 urllib）
+#   beautifulsoup4 —— 仅编解码的乱码修复使用
+#   zhipuai        —— 零 import（旧版遗留）
+#   paramiko       —— 仅 ssh_service.py 使用（SSH 远端主机属终端管理）
+# 更早已移除（v2.1.2）：dashscope / chardet / pycryptodome（均零 import）

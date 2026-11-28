@@ -1,15 +1,10 @@
 import { Link, useNavigate } from "react-router";
 import {
-  Bot,
-  Languages,
-  Binary,
-  StickyNote,
   Settings,
   Wifi,
   WifiOff,
   FolderOpen,
   RefreshCw,
-  Terminal,
 } from "lucide-react";
 import { useConnStore } from "../services/ws";
 import { useSettingsModal } from "../store/settingsModal";
@@ -25,13 +20,10 @@ interface Feature {
   action?: "settings";
 }
 
+/** v2.1.3：系统固定功能面板（AI 对话 / 汉英翻译 / 编解码 / 终端管理 / 临时笔记）已移除，
+ *  首页入口只保留「工具箱设置」；日常使用走下方用户自定义菜单卡。 */
 const FEATURES: Feature[] = [
-  { key: "ai", to: "/ai", title: "AI 对话", desc: "多模型问答（Kimi / 通义 / 智谱 / DeepSeek / Ollama）", icon: Bot },
-  { key: "translate", to: "/translate", title: "汉英翻译", desc: "调用内置翻译服务，互译文本", icon: Languages },
-  { key: "codec", to: "/codec", title: "编解码", desc: "Base64 / URL / Unicode / JSON / MD5 / 乱码修复", icon: Binary },
-  { key: "shell", to: "/shell", title: "终端管理", desc: "本机命令行 + SSH 远端主机（导航条选择主机即连接执行）", icon: Terminal },
-  { key: "note", to: "/note", title: "临时笔记", desc: "本地留存的工作笔记（自动保存到浏览器）", icon: StickyNote },
-  { key: "settings", title: "工具箱设置", desc: "菜单栏 / 导航栏 / 工具 / AI 模型 / 更新记录", icon: Settings, action: "settings" },
+  { key: "settings", title: "工具箱设置", desc: "菜单栏 / 导航栏 / 工具 / 菜单展示 / 快捷键 / 更新记录", icon: Settings, action: "settings" },
 ];
 
 export function HomePage() {
@@ -103,7 +95,7 @@ export function HomePage() {
         )}
       </div>
 
-      {/* 固定功能卡 */}
+      {/* 系统卡（v2.1.3：只剩「工具箱设置」；其余固定功能面板已移除） */}
       <div className="home-grid">
         {FEATURES.map((f) => {
           const Icon = f.icon;

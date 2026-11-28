@@ -30,6 +30,8 @@ web/.vite/
 /dist/
 /DaybreakToolbox*
 packaging/out/
+# 原始高清 logo（1024×1024，仅本地留档；线上用 web/public 的 128px 压缩版）
+packaging/logo-src/
 
 # Windows 保留名（MSYS2 误建）
 /nul
