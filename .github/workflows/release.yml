@@ -133,7 +133,10 @@ jobs:
           for m in openai requests bs4 paramiko zhipuai nacl bcrypt \
                    chardet dashscope Crypto Cryptodome numpy invoke \
                    PIL._avif PIL.AvifImagePlugin PIL._imagingft PIL._webp \
-                   PIL.WebPImagePlugin PIL.ImageTk PIL.ImageQt PIL.ImageGrab PIL.ImageShow; do
+                   PIL.WebPImagePlugin PIL.ImageTk PIL.ImageQt PIL.ImageGrab PIL.ImageShow \
+                   fastapi starlette uvicorn websockets wsproto \
+                   pydantic pydantic_core pydantic_settings \
+                   anyio sniffio watchfiles httptools h11 click uvloop httpx httpcore; do
             slim_excludes="$slim_excludes --exclude-module $m"
           done
           pyinstaller --name DaybreakToolbox --clean --noconfirm \

@@ -45,7 +45,9 @@ Name: "chinesesimplified"; MessagesFile: "languages\ChineseSimplified.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式:"
 
 [Files]
-Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; v2.2.3：排除运行时生成的 WebView2 用户缓存（data\）与日志——本地真机验证后这些目录会
+; 长大到数十 MB，打进安装包既增大体积又把验证机的浏览器状态带给所有用户（首次启动自动重建）。
+Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "data\*,daybreak.log"
 
 [Icons]
 Name: "{group}\Daybreak Toolbox"; Filename: "{app}\DaybreakToolbox.exe"

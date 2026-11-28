@@ -1,18 +1,12 @@
-"""破晓·工具箱 —— 桥接服务（FastAPI + uvicorn，仅 127.0.0.1）。
+"""破晓·工具箱 —— 桥接服务（内置 HTTP 服务，仅 127.0.0.1；v2.1.4 起零第三方框架）。
 
-目标态（docs/React_TS_UI_重构方案.md §3）：
+目标态：
   Python 单进程内
-  ├─ uvicorn (thread) 127.0.0.1:8765
-  │   ├─ /ws   WebSocket 事件总线（token 鉴权）
-  │   └─ /api  REST（配置 CRUD，token 鉴权）
+  ├─ ThreadingHTTPServer (thread) 127.0.0.1:8765   ← 标准库，无 FastAPI/uvicorn/WebSocket
+  │   ├─ /api/rpc    命令请求-响应（token 鉴权）
+  │   ├─ /api/events SSE 事件推送（menu.changed / settings.changed / shortcut.changed）
+  │   └─ /*          web/dist 静态资源 + SPA 兜底
   └─ 各 service（menu / execute / dialog / shortcut / settings / update）
-
-本文件为 **Phase 1 骨架**：
-  - 端口 8765 起冲突 +1 最多 5 次
-  - token 鉴权（WS query ?token= / REST Bearer）
-  - /api/ping + /api/echo（自检）
-  - /ws + 一条 echo 命令（前端冒烟用）
-  - 优雅关停
 
 启动：python -m bridge.main
 冒烟：python -m bridge.smoke  （另起进程）
@@ -20,22 +14,17 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import socket
 import sys
 import threading
 import time
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, Query
-from fastapi.responses import JSONResponse
-
 from . import token as _token_mod
-from .ws import WsBus, BridgeError
+from .server import (BridgeBus, BridgeError, make_server, serve_in_thread, wait_ready)
 from .menu_service import (list_menus, add_menu, delete_menu, rename_menu, rename_nav,
                            add_nav, delete_nav,
                           reorder_menus, reorder_navs,
@@ -80,8 +69,7 @@ def find_free_port(base: int = _BASE_PORT, retries: int = _MAX_RETRY) -> int:
 
 
 # ---- 全局实例 ----
-_bus = WsBus()
-_bridge_loop: Optional[asyncio.AbstractEventLoop] = None  # 跨线程广播用
+_bus = BridgeBus()
 _current_port: Optional[int] = None
 
 
@@ -315,7 +303,11 @@ def _register_builtin_commands() -> None:
         return await asyncio.to_thread(quit_app)
 
     async def _window_get_rect(_p, _ws):
-        return {"rect": await asyncio.to_thread(window_rect)}
+        # v2.2.3：附带最大化状态 —— 顶栏拖拽据此判定「先还原再移动」，且页面重载后依然准确
+        def _read():
+            r = window_rect()
+            return {"rect": r, "maximized": bool(r is not None and _is_window_maximized())}
+        return await asyncio.to_thread(_read)
 
     async def _window_move(p, _ws):
         return await asyncio.to_thread(move_window, int(p.get("x", 0)), int(p.get("y", 0)))
@@ -354,125 +346,36 @@ def _register_builtin_commands() -> None:
     _bus.register("window.drag_end", _window_drag_end)
 
 
-def build_app() -> FastAPI:
-    @asynccontextmanager
-    async def _lifespan(_app: FastAPI):
-        # uvicorn 事件循环 → 翻译 / AI / 编解码 worker 的跨线程广播依赖它
-        # （原 @app.on_event("startup")，FastAPI 已弃用 → lifespan）
-        global _bridge_loop
-        _bridge_loop = asyncio.get_running_loop()
-        yield
-
-    app = FastAPI(title="Daybreak Toolbox Bridge", version="2.1.3", lifespan=_lifespan)
-    _token_mod.get_token()  # 确保 token 已生成
-
-    @app.get("/api/ping")
-    async def api_ping(authorization: str = Header(default="")):
-        tok = _extract_bearer(authorization)
-        if not _token_mod.validate(tok):
-            return JSONResponse({"ok": False, "code": "TOKEN_INVALID"}, status_code=401)
-        return {"ok": True, "token_hint": _token_mod.get_token()[:8] + "…"}
-
-    @app.get("/api/echo")
-    async def api_echo(msg: str = Query(default="hello"), authorization: str = Header(default="")):
-        if not _token_mod.validate(_extract_bearer(authorization)):
-            return JSONResponse({"ok": False, "code": "TOKEN_INVALID"}, status_code=401)
-        return {"ok": True, "echo": msg}
-
-    @app.websocket("/ws")
-    async def ws_endpoint(ws: WebSocket, token: str = Query(default="")):
-        if not _token_mod.validate(token):
-            await ws.accept()
-            await ws.send_text(json.dumps({"v": 1, "type": "err",
-                                           "payload": {"code": "TOKEN_INVALID"}},
-                                          ensure_ascii=False))
-            await ws.close(code=4401)
-            return
-
-        await ws.accept()
-        _bus._clients[ws] = True
-        try:
-            # 握手确认
-            await _bus.send_to(ws, "connected", {"port": _current_port or 0})
-            while True:
-                raw = await ws.receive_text()
-                await _bus.handle_inbound(ws, raw)
-        except WebSocketDisconnect:
-            pass
-        finally:
-            _bus._clients.pop(ws, None)
-            _bus.detach(ws)  # 停止该连接的 handler FIFO worker（在途任务取消，底层线程自行收尾）
-
-    # ---- /api/token：prod（webview 同源）自动取 token，免去手动粘贴 ----
-    @app.get("/api/token")
-    async def api_token():
-        # 仅 127.0.0.1 可达；同源前端直接 fetch 注入
-        return {"token": _token_mod.get_token()}
-
-    # ---- 静态服务（webview 单入口）：/ws + /api + web/dist 同端口 8765 ----
-    _dist_dirs = [
+def _bridge_dist() -> Optional[Path]:
+    """web/dist 位置：打包态优先 _MEIPASS/dist（PyInstaller add-data），开发态项目根/web/dist。"""
+    cands = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cands.append(Path(meipass) / "dist")
+    cands += [
         Path(__file__).resolve().parent.parent / "web" / "dist",  # 开发：项目根/web/dist
         Path(__file__).resolve().parent.parent / "dist",         # 打包：exe 旁 dist/
     ]
-    _dist = next((d for d in _dist_dirs if d.is_dir()), None)
-    if _dist:
-        from fastapi.staticfiles import StaticFiles
-        from fastapi.responses import FileResponse
-
-        _index = _dist / "index.html"
-        _assets = _dist / "assets"
-
-        @app.get("/")
-        async def _index_route():
-            return FileResponse(_index)
-
-        if _assets.is_dir():
-            app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
-
-        # SPA 兜底：未注册的 GET（如 /ai、/shell）回 index.html，交给 React Router
-        @app.get("/{_full_path:path}", include_in_schema=False)
-        async def _spa_fallback(_full_path: str):
-            # 已存在的静态文件优先（favicon 等）
-            _candidate = _dist / _full_path
-            if _candidate.is_file():
-                return FileResponse(_candidate)
-            return FileResponse(_index)
-
-        print(f"[bridge] 静态服务: {str(_dist)} (webview 单入口)")
-    else:
-        print("[bridge] 未找到 web/dist（先 pnpm build）；webview 需浏览器打开 127.0.0.1:8765")
-
-    return app
+    return next((d for d in cands if (d / "index.html").is_file()), None)
 
 
-def _extract_bearer(authorization: str) -> Optional[str]:
-    if not authorization:
-        return None
-    if authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return authorization.strip()
+def start_bridge(port: int):
+    """注册全部命令 + 起内置 HTTP 服务（daemon 线程，返回即已 serve_forever）。
 
-
-# ---- 进程内 uvicorn（供 webview / 其他入口复用）----
-import uvicorn
-
-
-def run_blocking(port: Optional[int] = None) -> None:
-    """同步启动 uvicorn（阻塞当前线程）。供 webview 主线程调用。
-    注意：本模式下主线程被 uvicorn 占用；托盘可用。"""
-    global _current_port
-    port = port or find_free_port()
-    _current_port = port
-    app = build_app()
+    v2.1.4：取代旧的 build_app() + uvicorn.Config/Server —— 服务端零第三方框架依赖。
+    """
     _register_builtin_commands()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    print(f"[bridge] listening on 127.0.0.1:{port}")
-    print(f"[bridge] token: {_token_mod.get_token()}")
-    # 桌面托盘（daemon 线程；pystray 缺失 / 非 Windows / DAYBREAK_NO_TRAY=1 时静默跳过）
-    start_tray(port)
-    server.run()  # 阻塞
-
+    _bus.start_loop()          # 常驻 asyncio loop（handler 全是 async）
+    _token_mod.get_token()     # 确保 token 已生成（同源 /api/token 供前端读取）
+    dist = _bridge_dist()
+    srv = make_server(dist, port, _bus, _token_mod.get_token, _token_mod.validate)
+    serve_in_thread(srv)
+    if wait_ready(port, 5.0):
+        print(f"[bridge] listening on 127.0.0.1:{port}（stdlib HTTP + SSE）")
+        print(f"[bridge] 静态服务: {dist if dist else '未找到 web/dist（先 pnpm build）'}")
+    else:
+        print(f"[bridge] 警告：127.0.0.1:{port} 5s 内未应答 /api/ping")
+    return srv
 
 def pick_mode(argv: "list[str]") -> str:
     """入口形态（纯函数，可测试）：
@@ -489,7 +392,9 @@ def pick_mode(argv: "list[str]") -> str:
 _WINDOWED_UI = False  # 模块标志：run_windowed 创建窗口前置 True；app.env 命令返回
 _WINDOW_MIN_W, _WINDOW_MIN_H = 960, 600  # 与 run_windowed 的 min_size 同源
 # v2.0.20：窗口尺寸固定为主屏工作区的 80%（用户要求：不可拖拽拉伸，仅保留 最大化/还原）。
-# _FIXED_WINDOW_SIZE 由 run_windowed 启动时写入（逻辑像素），此后所有 resize/set_rect 都钳到该值。
+# v2.2.1：恢复可缩放 —— 用户要求「像 Windows 应用一样三边+四角可拉伸，但有最小尺寸」。
+#   _FIXED_WINDOW_SIZE 不再钳死尺寸：仅保留为「初始尺寸」参考，_clamp_window_size 改为
+#   按 _WINDOW_MIN_W/_WINDOW_MIN_H 钳制最小值（拉不破、也拉不小）。
 _WINDOW_SIZE_RATIO = 0.8
 _FIXED_WINDOW_SIZE: "tuple[int, int] | None" = None
 
@@ -497,9 +402,11 @@ _FIXED_WINDOW_SIZE: "tuple[int, int] | None" = None
 
 def get_app_env() -> dict:
     """进程运行形态（web 端据此决定渲染 关闭X/最大化/拖移/拉伸 控件；非窗口形态不渲染）。
-    v2.0.18：新增 version（单一来源 update_service.APP_VERSION；web 品牌区展示，取不到不渲染）。"""
+    v2.0.18：新增 version（单一来源 update_service.APP_VERSION；web 品牌区展示，取不到不渲染）。
+    v2.2.3：新增 maximized（几何驱动）——页面重载后顶栏图标/拖拽还原仍与真实窗口状态一致。"""
     return {"windowed": _WINDOWED_UI, "frameless": _WINDOWED_UI, "platform": sys.platform,
-            "version": APP_VERSION}
+            "version": APP_VERSION,
+            "maximized": bool(_WINDOWED_UI and sys.platform == "win32" and _is_window_maximized())}
 
 
 def _active_window():
@@ -546,11 +453,10 @@ def move_window(x: int, y: int) -> dict:
 
 def _clamp_window_size(width, height) -> "tuple[int, int]":
     """尺寸钳制（纯函数可测）。
-    v2.0.20：固定尺寸模式（_FIXED_WINDOW_SIZE 已由 run_windowed 写入）下恒返回 80% 工作区尺寸
-    —— 窗口不可拖拽拉伸；最大化/还原走 _set_window_geometry（不经本函数）不受影响。
-    固定值未初始化（服务形态 / 单测）时保持旧的最小尺寸钳制语义。"""
-    if _FIXED_WINDOW_SIZE:
-        return _FIXED_WINDOW_SIZE
+    v2.2.1：恢复可缩放 —— 不再钳死为固定尺寸，改为「不低于最小尺寸」钳制
+    （_WINDOW_MIN_W/_WINDOW_MIN_H = 960×600 逻辑像素，与 run_windowed 的 min_size 同源）。
+    v2.0.20 的固定尺寸模式（_FIXED_WINDOW_SIZE）已下线：用户要求窗口能像 Windows 应用
+    一样拖边/拖角拉伸，但仍要保留最小宽高（不能无限拉小）。"""
     return max(int(width), _WINDOW_MIN_W), max(int(height), _WINDOW_MIN_H)
 
 
@@ -876,6 +782,93 @@ def _is_maximized_geometry(rect, target, tol=8) -> bool:
             and abs(rect["width"] - target[2]) <= tol and abs(rect["height"] - target[3]) <= tol)
 
 
+def _rects_near(a, b, tol=8) -> bool:
+    """(l,t,w,h) 四元组近似相等（原生坐标空间，纯函数可单测）。"""
+    return bool(a and b and all(abs(a[i] - b[i]) <= tol for i in range(4)))
+
+
+def _pick_work_area_for_rect(phys_rect, mons) -> "tuple[int, int, int, int] | None":
+    """纯函数：窗口物理 rect 所在显示器的工作区 (l,t,w,h)。
+    v2.2.3 双屏修复的兜底路径：优先用 MonitorFromWindow（Windows 直接告诉我们在哪块屏）；
+    拿不到原生显示器句柄时退到这里——按左上角/中心点选屏，都不在则取中心最近的一块。
+    关键：必须在**同一坐标空间**里选屏（mons 与 phys_rect 都来自 GetWindowRect/EnumDisplayMonitors），
+    旧版把物理 rect 先换算成逻辑再回推，混合 DPI / 副屏在主屏右侧时会把目标推回主屏。"""
+    if not phys_rect or not mons:
+        return None
+    l, t, w, h = (int(v) for v in phys_rect)
+    cx, cy = l + w / 2.0, t + h / 2.0
+    best = None
+    best_area = -1
+    best_dist = None
+    for m in mons:
+        ml, mt, mw, mh = m["mon"]
+        # 与 Windows MonitorFromWindow 的语义一致：窗口跨屏时取**重叠面积最大**的那块屏
+        iw = max(0, min(l + w, ml + mw) - max(l, ml))
+        ih = max(0, min(t + h, mt + mh) - max(t, mt))
+        area = iw * ih
+        dx = max(ml - cx, 0, cx - (ml + mw))
+        dy = max(mt - cy, 0, cy - (mt + mh))
+        dist = dx * dx + dy * dy
+        if area > best_area or (area == best_area and (best_dist is None or dist < best_dist)):
+            best, best_area, best_dist = m, area, dist
+    return tuple(int(v) for v in best["work"]) if best else None
+
+
+def _window_work_area(w=None) -> "tuple[int, int, int, int] | None":
+    """窗口当前所在显示器的工作区（原生 API，与 GetWindowRect 同一坐标空间）。
+    v2.2.3：最大化/还原都以此为准——副屏最大化不再因为逻辑坐标换算跑回主屏。"""
+    try:
+        import ctypes
+        handle = _handle_int(w if w is not None else _active_window())
+        if not handle:
+            return None
+
+        class _R(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        class _MI(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint32), ("rcMonitor", _R),
+                        ("rcWork", _R), ("dwFlags", ctypes.c_uint32)]
+
+        user32 = ctypes.windll.user32
+        hmon = user32.MonitorFromWindow(handle, 2)  # MONITOR_DEFAULTTONEAREST
+        if not hmon:
+            return None
+        mi = _MI()
+        mi.cbSize = ctypes.sizeof(_MI)
+        if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            return None
+        return (mi.rcWork.left, mi.rcWork.top,
+                mi.rcWork.right - mi.rcWork.left, mi.rcWork.bottom - mi.rcWork.top)
+    except Exception:
+        return None
+
+
+def _is_window_maximized(w=None) -> bool:
+    """当前窗口几何是否铺满所在显示器工作区（±8px；与 flag 无关，页面重载后依然准）。"""
+    if w is None:
+        w = _active_window()
+    cur = _get_window_phys(w)
+    if not cur:
+        return False
+    work = _window_work_area(w)
+    if work is None:
+        work = _pick_work_area_for_rect(cur, _monitor_info_safe())
+    return _rects_near(cur, work)
+
+
+def _restore_geometry_for_work(work, mons=None) -> "tuple[int, int, int, int]":
+    """无 saved 几何时的还原目标：该显示器工作区的 80% 居中，且不小于窗口最小尺寸。
+    mons 可注入以便纯函数单测（默认现枚举显示器）。"""
+    wl, wt, ww, wh = (int(v) for v in work)
+    s = _monitor_scale_at(wl, wt, _monitor_info_safe() if mons is None else mons)
+    fw = max(int(_WINDOW_MIN_W * s), int(round(ww * _WINDOW_SIZE_RATIO)))
+    fh = max(int(_WINDOW_MIN_H * s), int(round(wh * _WINDOW_SIZE_RATIO)))
+    fw, fh = min(fw, ww), min(fh, wh)
+    return (wl + (ww - fw) // 2, wt + (wh - fh) // 2, fw, fh)
+
+
 def toggle_maximize() -> dict:
     """最大化/还原 toggle（几何驱动，幂等自愈）。
     Windows：读当前几何 vs 工作区目标判定 已/未最大化 → 手动 move/resize（WindowState 保持
@@ -889,23 +882,23 @@ def toggle_maximize() -> dict:
         return {"ok": False, "error": "window unavailable"}
     try:
         if sys.platform == "win32":
-            r = window_rect()
-            if r is None:
+            # v2.2.3：目标显示器由 Win32 MonitorFromWindow 直接给出（副屏不再误判为主屏），
+            # 全程用 GetWindowRect/GetMonitorInfoW 的同一坐标空间提交，不再做逻辑↔物理回推。
+            cur = _get_window_phys(w)
+            work = _window_work_area(w)
+            if work is None:
+                work = _pick_work_area_for_rect(cur, _monitor_info_safe())
+            if cur is None or work is None:
                 return {"ok": False, "error": "window unavailable"}
-            target = _win_maximize_target()
-            if target and _is_maximized_geometry(r, target):
-                # 处于最大化 → 还原（saved 缺失回退固定 80% 工作区居中——v2.0.20 窗口尺寸固定）
-                x, y, ww, hh = _MAX_STATE.get("saved") or _fixed_window_geometry()
-                _set_window_geometry(w, x, y, ww, hh)
+            if _rects_near(cur, work):
+                # 处于最大化 → 还原到此前几何（saved 缺失：当前屏工作区 80% 居中）
+                x, y, ww, hh = _MAX_STATE.get("saved") or _restore_geometry_for_work(work)
+                _set_window_geometry_phys(w, x, y, ww, hh)
                 _MAX_STATE = {"saved": None}
                 return {"ok": True, "maximized": False}
             # 非最大化 → 最大化（先缓存当前几何供还原）
-            _MAX_STATE = {"saved": (r["x"], r["y"], r["width"], r["height"])}
-            target = _win_maximize_target()
-            if target:
-                _set_window_geometry(w, target[0], target[1], target[2], target[3])
-            else:  # 窗口不可读（罕见）：保持现状，不切标志
-                return {"ok": False, "error": "window unavailable"}
+            _MAX_STATE = {"saved": cur}
+            _set_window_geometry_phys(w, work[0], work[1], work[2], work[3])
             return {"ok": True, "maximized": True}
         # macOS / Linux：原生最大化/还原（标志位配对；无边框在 cocoa/gtk 下行为正常）
         if _MAX_STATE.get("maximized"):
@@ -1130,9 +1123,9 @@ def _install_closing_hook() -> None:
                     return
                 i32 = wf.Int32
                 scale = _window_dpi_scale()
-                # v2.0.20：固定尺寸模式下 MinimumSize = 固定尺寸（窗口既不能缩小也不能拖拉伸；
-                # 最大化/还原走 Win32 SetWindowPos 不受 MinimumSize 限制），非固定模式维持 960×600
-                base_w, base_h = _FIXED_WINDOW_SIZE or (_WINDOW_MIN_W, _WINDOW_MIN_H)
+                # v2.2.1：恢复可缩放 —— MinimumSize 恒为最小尺寸 960×600（不再钳成固定尺寸），
+                # 与 _clamp_window_size 同源；最大化/还原走 Win32 SetWindowPos 不受 MinimumSize 限制
+                base_w, base_h = _WINDOW_MIN_W, _WINDOW_MIN_H
                 mw = int(round(base_w * scale))
                 mh = int(round(base_h * scale))
                 form.MinimumSize = wf.Size(i32(mw), i32(mh))
@@ -1473,25 +1466,10 @@ def run_windowed(port: Optional[int] = None) -> None:
         os._exit(0)
     port = port or find_free_port()
     _current_port = port
-    app = build_app()
-    _register_builtin_commands()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    srv = _threading.Thread(target=server.run, name="bridge-uvicorn", daemon=True)
-    srv.start()
-    for _ in range(100):
-        if server.should_exit or server.started:
-            break
-        srv.join(0.1)
+    # v2.1.4：内置 stdlib HTTP 服务（无 uvicorn）；start_bridge 内部含 5s 就绪探测
+    start_bridge(port)
     url = f"http://127.0.0.1:{port}/"
-    _perf("windowed.uvicorn_ready" if server.started else "windowed.uvicorn_degraded")
-    if not server.started:
-        # v2.0.12：10s 内桥接未就绪（端口竞态/异常）→ 不继续开空白窗口，降级浏览器模式
-        print(f"[bridge] 警告：桥接服务 10s 内未就绪（should_exit={server.should_exit}），"
-              f"降级服务模式（浏览器打开）")
-        _fallback_browser(port, url)
-        _threading.Event().wait()  # 保持进程存活（uvicorn 可能稍后恢复；托盘仍可用）
-        return
+    _perf("windowed.bridge_ready")
     print(f"[bridge] listening on 127.0.0.1:{port} (windowed)")
     print(f"[bridge] token: {_token_mod.get_token()}")
 
@@ -1504,11 +1482,23 @@ def run_windowed(port: Optional[int] = None) -> None:
         _perf("windowed.before_window")  # 距 uvicorn ready 的间隔 ≈ build_app + 托盘线程化后的准备开销
         # v2.0.20：固定尺寸 = 主屏工作区 80%（居中）；resizable=False 去掉 WS_THICKFRAME，
         # 系统层面也无法拖边拉伸，仅保留 最大化/还原（后端几何驱动，见 toggle_maximize）。
+        # v2.2.1：恢复可缩放 —— resizable=True + min_size=(最小宽高)。
+        #   无边框（frameless）下 Windows 不画原生缩放边框，缩放手柄由前端自绘（8 向）
+        #   并通过 window.set_rect 流驱动 SetWindowPos；后端 min_size 只作最后一道防线。
         fx, fy, fw, fh = _fixed_window_geometry()
         _FIXED_WINDOW_SIZE = (fw, fh)
-        print(f"[bridge] 固定窗口 {fw}×{fh} @({fx},{fy})（主屏工作区 80%；禁止拖拽拉伸，仅最大化/还原）")
+        print(f"[bridge] 初始窗口 {fw}×{fh} @({fx},{fy})（主屏工作区 80%；可拖边/拖角拉伸，最小 {_WINDOW_MIN_W}×{_WINDOW_MIN_H}）")
+        # v2.1.4 关键修复（用户反馈「点界面空白处滑动就把整个窗口带走」）：
+        #   pywebview 在 edgechromium + frameless 下 easy_drag 默认 True，会往页面注入
+        #   `window.addEventListener('mousedown', onMouseDown)`（见 webview/js/customize.js）——
+        #   任意位置按下鼠标即进入拖窗，且它的 mousemove 监听在 mouseup 丢失时同样残留。
+        #   这与「顶栏驱动移动窗口」的设计冲突，也直接毁掉内容区（笔记/长文）的鼠标框选。
+        #   → easy_drag=False：只保留 AppShell 顶栏自研拖拽（v2.1.2 已加固幂等拆除）。
+        # text_select：pywebview 默认 False 会注入全局 `user-select:none`，输入框外一律无法选中
+        #   → 改为 True，改由 CSS 对按钮/顶栏等 UI 局部禁用（AppShell.css 已有）。
         webview.create_window("破晓·工具箱", url, x=fx, y=fy, width=fw, height=fh,
-                              resizable=False, min_size=(fw, fh), frameless=True)
+                              resizable=True, min_size=(_WINDOW_MIN_W, _WINDOW_MIN_H), frameless=True,
+                              easy_drag=False, text_select=True)
         _perf("windowed.window_created")
         _install_window_hooks_once()  # v2.0.17：后台等窗体就绪 → Alt+F4 钩子 + WinForms 属性归一化
         # v2.1.1：持久化 WebView2 profile（复用 JS/GPU 缓存）；目录不可用时退回私有模式
@@ -1558,26 +1548,8 @@ def main() -> None:
         # 开发态：日志输出到 stderr（bridge 诊断；frozen 态由 run_bootstrap 统一落盘）
         logging.basicConfig(level=logging.INFO,
                             format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    app = build_app()
-    _register_builtin_commands()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    srv = _threading.Thread(target=server.run, name="bridge-uvicorn", daemon=True)
-    srv.start()
-    for _ in range(100):
-        if server.should_exit:
-            break
-        if server.started:
-            break
-        srv.join(0.1)
-    if not server.started:
-        # v2.0.12：桥接未就绪警告（托盘/进程仍存活，uvicorn 稍后可能恢复；不静默）
-        _perf("service.uvicorn_degraded")
-        print(f"[bridge] 警告：桥接服务 10s 内未就绪（should_exit={server.should_exit}）；"
-              f"进程/托盘保持，界面暂不可用")
-    else:
-        _perf("service.uvicorn_ready")
-        print(f"[bridge] listening on 127.0.0.1:{port}")
+    start_bridge(port)          # v2.1.4：stdlib HTTP + SSE（无 uvicorn）
+    _perf("service.bridge_ready")
     print(f"[bridge] token: {_token_mod.get_token()}")
     print(f"[bridge] 界面地址 http://127.0.0.1:{port}/ （托盘「打开首页」/ 浏览器手动访问亦可）")
 

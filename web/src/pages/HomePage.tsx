@@ -35,10 +35,13 @@ export function HomePage() {
   const refreshMenus = useMenuStore((s) => s.refresh);
   const online = conn === "online";
 
-  // 点菜单卡 → 进该菜单第一个导航（无导航则首页）的工具画布页
+  // 点菜单卡 → 该菜单上架到顶栏（v2.2.0）+ 进该菜单第一个导航的工具画布页
   function openMenu(name: string, navs: string[]) {
-    useMenuStore.getState().openToolCanvas(name, navs[0] ?? "首页");
-    navigate(`/tools/${encodeURIComponent(name)}/${encodeURIComponent(navs[0] ?? "首页")}`);
+    const st = useMenuStore.getState();
+    st.pinMenu(name);
+    const nav = navs[0] ?? "首页";
+    st.openToolCanvas(name, nav);
+    navigate(`/tools/${encodeURIComponent(name)}/${encodeURIComponent(nav)}`);
   }
 
   return (

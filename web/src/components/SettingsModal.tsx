@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useNavigate } from "react-router";
 import { X, Plus, Trash2, Pencil, Maximize2, Minimize2, RefreshCw, FolderOpen, Eye, Wrench, Keyboard, Download, Star, Menu, List, Settings, Sun, Moon, Monitor } from "lucide-react";
 import { sendCommand, subscribeEvent } from "../services/ws";
 import { AboutDialog } from "./AboutDialog";
 import { useToast } from "./toast";
 import { useSettingsModal } from "../store/settingsModal";
+import { useMenuStore } from "../features/menu/store";
 import { useTheme } from "../theme/ThemeProvider";
 import type { ThemeChoice } from "../theme/ThemeProvider";
 import { promptOpen, usePromptStore } from "./PromptDialog";
@@ -55,6 +57,7 @@ const RUN_TYPES = ["直接打开", "命令行打开", "文件夹打开", "链接
  */
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [tab, setTab] = useState<TabKey>("general");
+  const navigate = useNavigate();
 
   // 通用设置：主题（与顶栏主题循环按钮共用 ThemeProvider，立即生效 + 本地持久化）
   const { theme, set: setTheme } = useTheme();
@@ -341,14 +344,16 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
   if (!open) return null;
 
-  async function run(fn: () => Promise<unknown>, okMsg: string) {
-    if (busy) return;
+  async function run(fn: () => Promise<unknown>, okMsg: string): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     try {
       await fn();
       toast.ok(okMsg);
+      return true;
     } catch (e) {
       toast.err(String(e instanceof Error ? e.message : e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -674,11 +679,23 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                         use: activeNav || "首页", run_type: tRun, command: tCmd.trim(),
                       });
                       setTName(""); setTPath(""); setTCmd("");
+                      // v2.2.0：主动拉一次全局菜单/工具数据（menu.changed 事件是异步的，
+                      // 这里先刷新保证关闭弹框后顶栏/左侧栏已是新数据）
+                      await useMenuStore.getState().refresh();
                       const r = await sendCommand("menu.list_tools", { menu: activeMenu });
                       setTools((r.tools ?? []) as ToolInfo[]);
                     },
                     `工具已添加到「${activeMenu} / ${activeNav || "首页"}」`
-                  )}
+                  ).then((ok) => {
+                    // v2.2.0：添加成功后收起设置弹框、把该菜单上架到顶栏并直接打开该导航画布
+                    if (!ok) return;
+                    const menu = activeMenu, nav = activeNav || "首页";
+                    const st = useMenuStore.getState();
+                    st.pinMenu(menu);
+                    st.openToolCanvas(menu, nav);
+                    onClose();
+                    navigate(`/tools/${encodeURIComponent(menu)}/${encodeURIComponent(nav)}`);
+                  })}
                 >
                   <Plus size={13} /> 添加工具
                 </button>

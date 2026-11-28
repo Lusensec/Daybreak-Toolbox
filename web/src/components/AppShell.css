@@ -81,6 +81,14 @@
   scrollbar-width: none;     /* Firefox：隐藏滑条 */
 }
 .menu-nav::-webkit-scrollbar { display: none; }  /* WebKit：隐藏滑条 */
+/* v2.2.1：顶栏中部拖动垫片 —— 占据菜单行剩余空白，按住可拖动窗口。
+   flex:1 撑满剩余空间；min-width 让菜单多时能压缩到 0（此时顶栏没空白可拖，属正常）。 */
+.menu-nav__pad {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+  cursor: default;
+}
 .nav-link {
   padding: 6px 12px;
   border-radius: 6px;
@@ -109,11 +117,50 @@
   flex: 0 0 auto;
 }
 .dynamic-menu { position: relative; }
+/* v2.2.2：菜单按钮 + 「×」组成一组。
+   × 常态完全隐藏（width/opacity 归零且不占布局），悬停该组时在按钮内部右端浮现 ——
+   按钮已预留右侧内边距（padding-right），× 不会压住文字，也不会盖到相邻按钮。 */
+.dynamic-menu__wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.dynamic-menu__close {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+/* 悬停该菜单按钮（或 × 自身）时显示 × */
+.dynamic-menu__wrap:hover .dynamic-menu__close,
+.dynamic-menu__close:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.dynamic-menu__close:hover {
+  background: var(--error);
+  color: #fff;
+}
 .dynamic-menu__btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  /* v2.2.2：右侧预留 × 的位置（悬停浮现）—— 预留而非动态撑开，避免整排菜单宽度抖动 */
+  padding: 6px 24px 6px 12px;
   border-radius: 6px;
   font-size: 13px;
   color: var(--muted);
@@ -179,13 +226,15 @@
 }
 .dynamic-menu__item:hover { background: var(--accent-lo); color: var(--accent); }
 
-/* ---- 导航栏行（菜单栏正下方，常驻第二行；主视图与子窗口画布同款，可横向滚动） ---- */
+/* ---- 导航栏行（菜单栏正下方，常驻第二行；主视图与子窗口画布同款，可横向滚动） ----
+   v2.2.2：该行下沉到右侧内容列顶部（不再横跨整窗压在侧栏上方），
+   并压缩高度（40px → 32px），按钮内边距同步收紧。 */
 .nav-bar-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 16px;
-  min-height: 40px;
+  gap: 6px;
+  padding: 2px 16px;
+  min-height: 32px;
   flex: 0 0 auto;
   background: var(--heading-bg);
   border-bottom: 1px solid var(--border);
@@ -201,9 +250,9 @@
   flex: 0 0 auto;
 }
 .nav-bar-row__btn {
-  padding: 6px 12px;
+  padding: 4px 10px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--muted);
   background: transparent;
   border: none;
@@ -263,12 +312,64 @@
   border-color: #d13438;
 }
 /* v2.0.20：窗口尺寸固定为主屏工作区 80%，全边缘/角落拉伸手柄（.win-edge-*）样式已移除 */
+/* v2.2.1：恢复可缩放 —— 自绘 8 向手柄（无边框窗口没有 Windows 原生缩放边框）。
+   边手柄 10px 厚、角手柄 16×16px，命中区留足余量：
+   WebView2 真实鼠标命中与 elementFromPoint 存在 ~1px 亚像素偏差，
+   命中区太窄容易点空（实测 6px 时偶尔落到下层元素）。
+   z-index 低于模态框/右键菜单，避免遮挡弹层。 */
+.win-edge {
+  position: fixed;
+  z-index: 900;
+  background: transparent;
+}
+.win-edge--s  { bottom: 0; left: 16px; right: 16px; height: 10px; }
+.win-edge--e  { right: 0; top: 16px; bottom: 16px; width: 10px; }
+.win-edge--w  { left: 0; top: 16px; bottom: 16px; width: 10px; }
+.win-edge--nw { top: 0; left: 0; width: 16px; height: 16px; }
+.win-edge--ne { top: 0; right: 0; width: 16px; height: 16px; }
+.win-edge--sw { bottom: 0; left: 0; width: 16px; height: 16px; }
+.win-edge--se { bottom: 0; right: 0; width: 16px; height: 16px; }
 
 /* ---- 主内容区 ---- */
+/* v2.2.0：顶栏 + 导航行之下是「左侧导航栏 | 内容区」的水平布局
+   （侧栏固定宽、内容区自适应；min-height:0 保证两侧各自滚动而不撑开窗口）
+   v2.2.2：新增 .content-col —— 右侧内容列（导航栏行 + 内容区），导航行不再横跨整窗。 */
+.app-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.content-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .content {
   flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   overflow: auto;
   padding: 16px;
+}
+
+/* v2.2.2：隐藏滚动条滑块（滚动功能保留）。
+   左侧导航栏与内容区各有一条常驻滑块，视觉上像「多了一个轮子」，实则占位且抢眼。
+   这里直接**完全隐藏**滑块（不占任何布局宽度）—— 滚轮 / 触控板 / 键盘滚动全部照常，
+   只是不再显示那根竖条；需要看滚动位置时把鼠标移到该区域、拖动内容即可。 */
+.content,
+.side-nav__list {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* 旧 Edge */
+}
+.content::-webkit-scrollbar,
+.side-nav__list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 /* v2.0.20：底部状态栏已移除（连接状态迁至顶栏品牌区版本号右侧，见 .menu-brand__conn） */

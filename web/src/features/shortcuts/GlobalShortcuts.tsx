@@ -73,6 +73,8 @@ function dispatchSlot(slot: string, st: ReturnType<typeof useMenuStore.getState>
     const name = slot.slice(4);
     if (!st.menus.some((m) => m.name === name)) return;
     const nav = st.menus.find((m) => m.name === name)?.navigation_bar_name[0] ?? "首页";
+    // v2.2.0：顶栏默认只留首页 → 快捷键直达某菜单时同步把它上架到顶栏（否则导航行不显示）
+    st.pinMenu(name);
     st.openToolCanvas(name, nav);
     navigate(`/tools/${encodeURIComponent(name)}/${encodeURIComponent(nav)}`);
     return;

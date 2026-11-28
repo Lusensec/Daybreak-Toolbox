@@ -31,7 +31,7 @@ def test_app_env_includes_version():
     from bridge.update_service import APP_VERSION
     env = bmain.get_app_env()
     assert env["version"] == APP_VERSION
-    assert APP_VERSION == "2.1.3"  # 锚定单一来源常量值（随当前发行版本更新）
+    assert APP_VERSION == "2.2.3"  # 锚定单一来源常量值（随当前发行版本更新）
 
 
 def test_window_rect_no_window_returns_none():
@@ -154,6 +154,32 @@ def test_maximize_target_mixed_dpi():
     assert bmain._physical_to_logical(wl, wt, ww, wh, _MIXED) == (1536, 0, 1600, 900)
     wl, wt, ww, wh = _MIXED[0]["work"]
     assert bmain._physical_to_logical(wl, wt, ww, wh, _MIXED) == (0, 0, 1536, 816)
+
+
+def test_pick_work_area_for_rect_stays_on_second_monitor():
+    """v2.2.3 双屏最大化回归：窗口在副屏 → 工作区必须取副屏，不能回退主屏。
+    同一坐标空间（GetWindowRect 与 EnumDisplayMonitors 原生值）选屏，不再逻辑↔物理回推。"""
+    # 副屏 (1920,0,1600,900) 内的窗口
+    assert bmain._pick_work_area_for_rect((2384, 100, 1000, 700), _MIXED) == (1920, 0, 1600, 900)
+    # 主屏窗口
+    assert bmain._pick_work_area_for_rect((125, 125, 1000, 750), _MIXED) == (0, 0, 1920, 1020)
+    # 左上角越界（跨屏拖拽）但中心在副屏 → 仍选副屏
+    assert bmain._pick_work_area_for_rect((1500, 100, 1200, 700), _MIXED) == (1920, 0, 1600, 900)
+    # 无显示器信息 → None（调用方走原生 MonitorFromWindow / 报错守卫）
+    assert bmain._pick_work_area_for_rect((100, 100, 800, 600), []) is None
+
+
+def test_rects_near_and_restore_geometry():
+    """最大化几何判定 / 还原目标（80% 居中 + 最小尺寸）纯函数。"""
+    assert bmain._rects_near((1920, 0, 1600, 900), (1924, 2, 1595, 903)) is True
+    assert bmain._rects_near((0, 0, 1536, 816), (1920, 0, 1600, 900)) is False
+    # 副屏 1600×900 @100%：80% = 1280×720（>= 960×600）
+    x, y, w, h = bmain._restore_geometry_for_work((1920, 0, 1600, 900), [])
+    assert (w, h) == (1280, 720)
+    assert (x, y) == (1920 + 160, 90)
+    # 小屏（1280×720）：高度 80%=576 < 最小 600 → 抬到 600
+    _, _, w, h = bmain._restore_geometry_for_work((0, 0, 1280, 720), [])
+    assert (w, h) == (1024, 600)
 
 
 def test_move_no_settle_is_fast(monkeypatch):
@@ -317,18 +343,51 @@ def test_fixed_window_geometry_fallback(monkeypatch):
     assert bmain._fixed_window_geometry() == (0, 0, 1280, 800)
 
 
-def test_clamp_window_size_fixed_mode(monkeypatch):
-    """固定尺寸模式：任何入参都返回固定值（resize / set_rect 无法改变窗口尺寸）。"""
+def test_clamp_window_size_keeps_min_floor(monkeypatch):
+    """v2.2.1：可缩放模式 —— 尺寸不再被钳死，但不得小于最小宽高 960×600。
+
+    v2.0.20 的「固定尺寸」语义已下线（用户要求像 Windows 应用一样可拖边/拖角拉伸，
+    但要有最小值，不能无限拉小）。"""
     monkeypatch.setattr(bmain, "_FIXED_WINDOW_SIZE", (1536, 832))
-    assert bmain._clamp_window_size(500, 300) == (1536, 832)
-    assert bmain._clamp_window_size(3000, 2000) == (1536, 832)
-
-
-def test_fixed_window_size_none_keeps_legacy_clamp(monkeypatch):
-    """未初始化（服务形态 / 单测）：保持 v2.0.19 的最小尺寸钳制语义。"""
-    monkeypatch.setattr(bmain, "_FIXED_WINDOW_SIZE", None)
     assert bmain._clamp_window_size(500, 300) == (960, 600)
+    assert bmain._clamp_window_size(3000, 2000) == (3000, 2000)
+
+
+def test_clamp_window_size_exact_min_boundary(monkeypatch):
+    """恰好等于最小值时原样返回（不 +1、不越界）。"""
+    monkeypatch.setattr(bmain, "_FIXED_WINDOW_SIZE", None)
+    assert bmain._clamp_window_size(960, 600) == (960, 600)
+    assert bmain._clamp_window_size(959, 599) == (960, 600)
     assert bmain._clamp_window_size(1400, 900) == (1400, 900)
+
+
+# ---- v2.2.1：可缩放窗口的门禁（前端手柄 → window.set_rect → 后端钳制）----
+
+def test_clamp_window_size_allows_resize_upward():
+    """v2.2.1：允许放大到任意尺寸（不再被固定值钳死），这是「恢复可缩放」的核心语义。"""
+    assert bmain._clamp_window_size(2400, 1600) == (2400, 1600)
+    assert bmain._clamp_window_size(3840, 2160) == (3840, 2160)
+
+
+def test_clamp_window_size_blocks_shrink_below_min():
+    """v2.2.1：不能无限拉小 —— 小于最小尺寸时钳到 960×600（用户明确要求）。"""
+    assert bmain._clamp_window_size(100, 100) == (960, 600)
+    assert bmain._clamp_window_size(959, 600) == (960, 600)
+    assert bmain._clamp_window_size(960, 599) == (960, 600)
+    # 单轴越界只钳该轴，另一轴保持
+    assert bmain._clamp_window_size(500, 900) == (960, 900)
+    assert bmain._clamp_window_size(1400, 300) == (1400, 600)
+
+
+def test_window_min_size_matches_create_window_min_size():
+    """后端最小尺寸常量与 create_window(min_size=...) 必须一致，
+    否则「后端允许缩小但 WinForms MinimumSize 卡住」会出现拉伸回弹抖动。"""
+    import inspect
+    src = inspect.getsource(bmain.run_windowed)
+    assert f"min_size=(_WINDOW_MIN_W, _WINDOW_MIN_H)" in src
+    assert f"resizable=True" in src
+    # 固定尺寸模式已下线：不应再出现 min_size=(fw, fh)
+    assert "min_size=(fw, fh)" not in src
 
 
 # ---- v2.0.19：拖拽重绘挂起 / 钩子兜底 / 背景色兜底（纯逻辑门禁）----

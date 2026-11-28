@@ -25,12 +25,35 @@ interface MenuStore {
   loaded: boolean;
   activeMenu: string;
   activeNav: string;
+  /** v2.2.0：顶栏展示的菜单名列表（「已上架」）。
+   *  默认空 → 顶栏只剩固定菜单「首页」，全部用户菜单在左侧导航栏；
+   *  点左侧菜单/导航时该菜单被 pin 到顶栏并展开导航行；顶栏右键可移回左侧。
+   *  UI 状态（非数据），persist 到 localStorage。 */
+  pinned: string[];
   refresh: () => Promise<void>;
   openToolCanvas: (menu: string, nav?: string) => void;
   toggleMenu: (name: string) => void;   // 点顶栏动态菜单：显示/隐藏其导航行
   clearActive: () => void;             // 点固定功能导航时隐藏导航行
+  pinMenu: (name: string) => void;     // 菜单上架到顶栏
+  unpinMenu: (name: string) => void;   // 菜单移回左侧栏
   reorderMenus: (order: string[]) => Promise<boolean>;
   reorderNavs: (menu: string, order: string[]) => Promise<boolean>;
+}
+
+/** 顶栏「已上架」菜单名单（v2.2.0）：localStorage 持久化，刷新后保持 */
+const PINNED_KEY = "daybreak.topbar.pinned";
+
+function loadPinned(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(PINNED_KEY) || "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePinned(list: string[]) {
+  try { localStorage.setItem(PINNED_KEY, JSON.stringify(list)); } catch { /* 隐私模式忽略 */ }
 }
 
 /** 固定菜单栏是否显示（缺省 1） */
@@ -46,6 +69,7 @@ export const useMenuStore = create<MenuStore>((set, get) => ({
   loaded: false,
   activeMenu: "",
   activeNav: "首页",
+  pinned: loadPinned(),
 
   refresh: async () => {
     if (get().loading) return;
@@ -70,6 +94,12 @@ export const useMenuStore = create<MenuStore>((set, get) => ({
         }
       }));
       set({ tools: Object.fromEntries(toolMaps) });
+      // v2.2.0：清理已不存在的「已上架」菜单（被删除/改名 → 顶栏不残留幽灵按钮）
+      const pinned = get().pinned.filter((n) => menus.some((m) => m.name === n));
+      if (pinned.length !== get().pinned.length) {
+        set({ pinned });
+        savePinned(pinned);
+      }
       // 保持当前 activeMenu 有效；否则清空
       const cur = get().activeMenu;
       if (cur && !menus.some((m) => m.name === cur)) {
@@ -95,6 +125,26 @@ export const useMenuStore = create<MenuStore>((set, get) => ({
   },
 
   clearActive: () => set({ activeMenu: "", activeNav: "首页" }),
+
+  // v2.2.0：顶栏「已上架」菜单（左侧栏点击 → 回归顶栏并展开导航）
+  pinMenu: (name) => {
+    if (!name) return;
+    const cur = get().pinned;
+    if (cur.includes(name)) return;
+    const next = [...cur, name];
+    set({ pinned: next });
+    savePinned(next);
+  },
+
+  unpinMenu: (name) => {
+    const cur = get().pinned;
+    if (!cur.includes(name)) return;
+    const next = cur.filter((n) => n !== name);
+    set({ pinned: next });
+    savePinned(next);
+    // 移回左侧后顶栏不再有该菜单 → 导航行随之收起
+    if (get().activeMenu === name) set({ activeMenu: "", activeNav: "首页" });
+  },
 
   reorderMenus: async (order) => {
     const st = get();

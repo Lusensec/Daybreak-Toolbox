@@ -1,10 +1,12 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation } from "react-router";
-import { Wifi, WifiOff, Settings, Maximize, Copy, Minus, X } from "lucide-react";
+import { Wifi, WifiOff, Maximize, Copy, Minus, X } from "lucide-react";
 import { useTheme } from "../theme/ThemeProvider";
 import { connectBridge, disconnectBridge, useConnStore, sendCommand, fetchBridgeToken, subscribeEvent } from "../services/ws";
 import { DynamicMenuNav, NavBarRow, CtxMenu } from "./DynamicMenuNav";
 import type { CtxState } from "./DynamicMenuNav";
+import { SideNav } from "./SideNav";
+import { WindowResizer } from "./WindowResizer";
 import { ToastHost, useToast } from "./toast";
 import { PromptDialogHost } from "./PromptDialog";
 import { useSettingsModal } from "../store/settingsModal";
@@ -78,7 +80,7 @@ export default function AppShell() {
   const [token, setToken] = useState(() => localStorage.getItem("daybreak.token") ?? "");
   const [connected, setConnected] = useState(false);
   const [booting, setBooting] = useState(BRIDGE_HOSTED);
-  const { open: settingsOpen, openModal, closeModal } = useSettingsModal();
+  const { open: settingsOpen, closeModal } = useSettingsModal();
   const location = useLocation();
   const menuNavRef = useRef<HTMLElement>(null);
   const topBarRef = useRef<HTMLElement>(null); // 顶栏参照 rect（判定「栏内/栏外」脱离边界）
@@ -101,10 +103,14 @@ export default function AppShell() {
    *  `[draggable='true']` 选择器匹配不到），原生图片拖拽会吞掉 mouseup，窗口卡在拖拽态。
    *  v2.1.2：收窄热区 —— 菜单按钮行（.menu-nav）与右侧控件行（.menu-bar-right）整块排除。
    *  这两行是 flex 容器，按钮之间的 gap 空白其 target 就是容器本身，旧判定会放行，
-   *  导致「想点菜单却点进缝里 → 整个窗口被拖走」。现在只有品牌区与它们的真空白可拖。 */
+   *  导致「想点菜单却点进缝里 → 整个窗口被拖走」。现在只有品牌区与它们的真空白可拖。
+   *  v2.2.1：显式放行拖动垫片 .menu-nav__pad（顶栏中部空白区）——
+   *  用独立元素而非放行整个 .menu-nav，既满足「中部空白可拖窗口」，又不破坏 v2.1.2 的修复。 */
   function isHeaderDragTarget(t: EventTarget | null): boolean {
     if (!(t instanceof HTMLElement)) return false;
     if (t.closest("button, a, input, select, textarea, img, [draggable='true']")) return false;
+    // 拖动垫片优先放行（在 .menu-nav 内，必须先于下面的 .menu-nav 排除判定）
+    if (t.closest(".menu-nav__pad")) return true;
     if (t.closest(".menu-nav, .menu-bar-right")) return false;
     return true;
   }
@@ -112,8 +118,8 @@ export default function AppShell() {
   /** 顶栏拖拽移动窗口：mousedown 取一次窗口基准 rect → mousemove rAF 节流 window.move（DIP 增量）。
    *  v2.0.17：「至多一笔在途」背压（最新坐标由下一 rAF 携带，慢 RTT 平滑合并而非成批追帧）。
    *  v2.0.19：自适应节流——RTT 的 EMA > 16ms 时按 RTT 降频，给 WebView2 合成留时间。
-   *  v2.0.20：窗口尺寸固定（不可拉伸）后只剩「移动」，不再调用 drag_begin/drag_end——
-   *  v2.0.19 的 WM_SETREDRAW 挂起会冻死 WebView2 合成（点击左上角黑/白屏的根因）。 */
+   *  v2.2.3：最大化状态拖拽顶栏 = 先还原到全屏前尺寸，再按 Windows 原生习惯让窗口跟随光标
+   *  （光标在最大化窗口中的横向比例保持不变）；只有真正拖动超过阈值才还原，单击不误触。 */
   const DRAG_THRESHOLD = 3;  // px：位移小于该值视为单击，不发任何几何命令
   const geoInFlight = useRef(0);
   const geoRtt = useRef(8);       // 最近 RTT 的指数移动平均（ms）
@@ -145,10 +151,19 @@ export default function AppShell() {
     dragTeardown.current?.();
     void (async () => {
       try {
-        const r = (await sendCommand("window.get_rect", {})) as { rect?: { x: number; y: number; width: number; height: number } | null };
+        const r = (await sendCommand("window.get_rect", {})) as {
+          rect?: { x: number; y: number; width: number; height: number } | null;
+          maximized?: boolean;
+        };
         const rect = r?.rect;
         if (!rect) return;
         const d = { active: true, sx: e.screenX, sy: e.screenY, ox: rect.x, oy: rect.y };
+        // v2.2.3：最大化时拖拽 = 先还原再移动。单击不还原（与原生标题栏一致）。
+        const wasMaximized = Boolean(r?.maximized);
+        const grabRatioX = wasMaximized && rect.width > 0
+          ? Math.min(1, Math.max(0, (e.screenX - rect.x) / rect.width)) : 0;
+        let restored = !wasMaximized;
+        let restoreTask: Promise<void> | null = null;  // onUp 需等还原完成再补发最终坐标
         let moved = false;   // 超过阈值才进入拖拽（单击/点 logo 不发命令、不进入拖拽态）
         let queued = false;
         let lx = e.screenX, ly = e.screenY;
@@ -179,19 +194,43 @@ export default function AppShell() {
           requestAnimationFrame(() => {
             queued = false;
             if (!d.active) return;
-            sendGeo({ x: d.ox + (lx - d.sx), y: d.oy + (ly - d.sy) });
+            const task = (async () => {
+              if (!restored) {
+                restored = true;
+                try {
+                  const rr = (await sendCommand("window.maximize", {})) as { ok?: boolean; maximized?: boolean };
+                  if (rr?.ok) setMaximized(false);
+                  // 还原后的几何重新取一次（saved 几何可能来自另一块屏），
+                  // 并把基准重设为「光标仍处在原横向比例位置」，复刻 Windows 原生拖 maximized 窗口的手感
+                  const nr = (await sendCommand("window.get_rect", {})) as {
+                    rect?: { x: number; y: number; width: number; height: number } | null;
+                  };
+                  if (nr?.rect) {
+                    d.ox = nr.rect.x - grabRatioX * nr.rect.width;
+                    d.oy = nr.rect.y;
+                  }
+                } catch { /* 还原失败则维持原基准继续拖 */ }
+              }
+              if (!d.active) return;
+              sendGeo({ x: d.ox + (lx - d.sx), y: d.oy + (ly - d.sy) });
+            })();
+            restoreTask = task;
+            void task;
           });
         };
         const onUp = () => {
           const wasActive = d.active;
-          const nx = d.ox + (lx - d.sx);
-          const ny = d.oy + (ly - d.sy);
           const didMove = moved;
           teardown();
-          // 补发最终位置（节流可能跳过最后一帧）→ 窗口精确停在光标处；单击则完全不动
-          if (wasActive && didMove) {
+          // 补发最终位置（节流可能跳过最后一帧）→ 窗口精确停在光标处；单击则完全不动。
+          // 最大化拖拽时先等还原完成（d.ox 会在还原后重设），否则会把窗口钉回全屏前的位置。
+          void (async () => {
+            if (restoreTask) { await restoreTask; restoreTask = null; }
+            if (!wasActive || !didMove) return;
+            const nx = d.ox + (lx - d.sx);
+            const ny = d.oy + (ly - d.sy);
             void sendCommand("window.move", { x: nx, y: ny }).catch(() => {});
-          }
+          })();
         };
 
         dragTeardown.current = teardown;
@@ -287,9 +326,11 @@ export default function AppShell() {
     // 窗口形态探测：无边框窗口（frameless）才渲染 最大化/关闭X/拖移/拉伸 控件（浏览器/服务形态隐藏）
     sendCommand("app.env", {})
       .then((r) => {
-        const env = r as { windowed?: boolean; version?: string };
+        const env = r as { windowed?: boolean; version?: string; maximized?: boolean };
         if (env.windowed) { setWindowed(true); }
         if (typeof env.version === "string" && env.version) { setAppVersion(env.version); }
+        // v2.2.3：页面重载后仍与真实窗口状态一致（几何驱动，不依赖内存 flag）
+        if (typeof env.maximized === "boolean") { setMaximized(env.maximized); }
       })
       .catch(() => {});
     // v2.0.15：关闭行为提示（X 按钮 tooltip）——设置即时生效，改键时经 settings.changed 同步
@@ -368,6 +409,11 @@ export default function AppShell() {
             />
           ) : null}
           <DynamicMenuNav barRef={topBarRef} />
+          {/* v2.2.1：显式拖动垫片 —— 顶栏中部（菜单按钮右侧 → 右侧窗口控件之间）的空白区
+              可按住拖动窗口。用独立元素而非「放行 .menu-nav 容器」实现，是为了保住 v2.1.2 的修复：
+              菜单按钮之间的 4px gap 命中的是 .menu-nav 容器本身，仍被判为不可拖，
+              不会出现「想点菜单却点进缝里 → 整个窗口被拖走」。 */}
+          <div className="menu-nav__pad" title="按住拖动可移动窗口" />
           {fixedCtx ? (
             <CtxMenu
               state={fixedCtx}
@@ -383,9 +429,8 @@ export default function AppShell() {
           ) : null}
         </nav>
         <div className="menu-bar-right">
-          <button className="settings-btn" onClick={() => openModal()} title="工具箱设置">
-            <Settings size={16} /> 工具箱设置
-          </button>
+          {/* v2.2.1：右上角「工具箱设置」按钮已移除 —— 左下角侧栏已有「管理菜单」入口，
+              顶栏只保留原生窗口控件（最小化/最大化/关闭）。 */}
           {/* 自定义窗口控件（仅无边框窗口形态：原生标题栏已移除，窗口操作在此；顺序=原生 最小化/最大化/关闭）
               主题切换已移除（v2.0.9 起）：主题在「工具箱设置 → 通用设置 → 外观」配置，顶栏 logo 自动跟随 */}
           {windowed ? (
@@ -408,12 +453,20 @@ export default function AppShell() {
         </div>
       </header>
 
-      {/* 导航栏行：菜单栏正下方常驻第二行（旧版 create_Navigation_Bar 位置）。
-          点顶栏动态菜单按钮显示；点固定功能导航 / 再次点菜单则隐藏 */}
-      <NavBarRow />
+      {/* v2.2.0 布局：左侧导航栏（全部用户菜单在此，文件夹式可展开）+ 右侧内容区。
+          顶栏默认只剩固定菜单「首页」，左侧点菜单/导航 → 该菜单上架到顶栏并展开导航行。
 
-      <main className="content">
-        <Outlet />
+          v2.2.2 布局调整：顶栏展开后的「导航栏行」原本横跨整窗（位于侧栏上方），
+          现在下沉到**右侧内容列**内、面包屑之上 —— 侧栏恢复整列通高，导航行不再压在侧栏上方。 */}
+      <div className="app-body">
+        <SideNav />
+
+        <div className="content-col">
+          {/* 导航栏行：菜单栏正下方常驻第二行（v2.2.2 起位于内容列顶部，仅覆盖内容区宽度） */}
+          <NavBarRow />
+
+          <main className="content">
+          <Outlet />
 
         {/* 生产（bridge 自托管）模式下确实断开时给出明确提示（连接中/重连中由状态栏提示） */}
         {BRIDGE_HOSTED && conn === "disconnected" && !booting ? (
@@ -464,7 +517,9 @@ export default function AppShell() {
             </button>
           </div>
         ) : null}
-      </main>
+        </main>
+        </div>
+      </div>
 
       {/* v2.0.20：底部状态栏已移除（「就绪 · 破晓·工具箱」+ 已连接徽标）——
           连接状态移至顶栏品牌区版本号右侧；主内容区因此多出 28px 高度 */}
@@ -488,8 +543,9 @@ export default function AppShell() {
       {/* 全局重命名对话框（替代 window.prompt；顶栏右键 / 设置页 / 子窗口 共用） */}
       <PromptDialogHost />
 
-      {/* v2.0.20：全边缘/角落拉伸手柄（.win-edge-*）已移除——窗口固定为主屏工作区 80%，
-          仅保留顶栏 最大化/还原 与关闭；无边框窗口不再响应任何边缘拖拽拉伸 */}
+      {/* v2.2.1：窗口边缘缩放手柄（左右下三条边 + 四角），复刻 Windows 原生体验。
+          无边框窗口没有系统缩放边框，这里自绘透明手柄 → window.set_rect 流 → 后端 SetWindowPos。 */}
+      <WindowResizer enabled={windowed} />
     </div>
   );
 }

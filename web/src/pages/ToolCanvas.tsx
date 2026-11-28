@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { Package, Loader2, Plus } from "lucide-react";
-import { sendCommand } from "../services/ws";
+import { sendCommand, subscribeEvent } from "../services/ws";
 import { useMenuStore } from "../features/menu/store";
 import { useToast } from "../components/toast";
 import { useSettingsModal } from "../store/settingsModal";
@@ -50,6 +50,14 @@ export function ToolCanvas() {
 
   useEffect(() => {
     void loadGrid();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menu, nav]);
+
+  // v2.2.0：菜单/工具变更（设置页增删工具、右键删除）后自动重载当前画布，
+  // 避免「工具已删除但画布还挂着旧按钮」
+  useEffect(() => {
+    const un = subscribeEvent("menu.changed", () => { void loadGrid(); });
+    return un;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menu, nav]);
 

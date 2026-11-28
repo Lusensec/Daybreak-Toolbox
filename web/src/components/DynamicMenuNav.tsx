@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router";
-import { Pencil, Plus, Trash2, Eye } from "lucide-react";
+import { Pencil, Plus, Trash2, Eye, PanelLeft, X } from "lucide-react";
 import { useMenuStore } from "../features/menu/store";
 import { sendCommand } from "../services/ws";
 import { useToastStore } from "./toast";
@@ -24,7 +24,7 @@ export interface CtxState {
 
 export interface CtxItem {
   label: string;
-  icon?: "pencil" | "plus" | "trash" | "eye";
+  icon?: "pencil" | "plus" | "trash" | "eye" | "panel-left";
   danger?: boolean;
   run: () => void | Promise<void>;
 }
@@ -52,7 +52,7 @@ export function CtxMenu({ state, items, onClose }: { state: CtxState; items: Ctx
               void Promise.resolve(it.run()).finally(onClose);
             }}
           >
-            {it.icon === "pencil" ? <Pencil size={13} /> : it.icon === "plus" ? <Plus size={13} /> : it.icon === "trash" ? <Trash2 size={13} /> : it.icon === "eye" ? <Eye size={13} /> : null}
+            {it.icon === "pencil" ? <Pencil size={13} /> : it.icon === "plus" ? <Plus size={13} /> : it.icon === "trash" ? <Trash2 size={13} /> : it.icon === "eye" ? <Eye size={13} /> : it.icon === "panel-left" ? <PanelLeft size={13} /> : null}
             {it.label}
           </button>
         ))}
@@ -90,6 +90,19 @@ export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigat
             }
             toast.ok(`菜单栏已重命名为「${name}」`);
           } catch (e) { err(e); }
+        },
+      },
+      {
+        label: "移到左侧栏", icon: "panel-left",
+        run: () => {
+          // v2.2.0：顶栏「已上架」菜单移回左侧导航栏（顶栏只留首页 / 需要的菜单）。
+          // 若正停在该菜单的工具画布 → 一并回首页（该菜单已离开顶栏工作区，
+          // 留着画布却无导航行可切换会让人以为导航丢了）
+          const st = useMenuStore.getState();
+          const wasActive = st.activeMenu === m;
+          st.unpinMenu(m);
+          if (wasActive) opts.navigate("/");
+          toast.ok(`菜单栏「${m}」已移回左侧导航栏`);
         },
       },
       {
@@ -167,11 +180,14 @@ export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigat
 export function DynamicMenuNav({ barRef }: { barRef?: React.RefObject<HTMLElement | null> }) {
   const menus = useMenuStore((s) => s.menus);
   const activeMenu = useMenuStore((s) => s.activeMenu);
+  const pinned = useMenuStore((s) => s.pinned);
   const navigate = useNavigate();
   const [ctx, setCtx] = useState<CtxState | null>(null);
 
-  // 菜单栏展示参数（config.json menu_visible）：0 = 顶栏不渲染该菜单栏
-  const visibleMenus = menus.filter((m) => (m.menu_visible ?? 1) !== 0);
+  // v2.2.0：顶栏只渲染「已上架」的菜单（默认空 → 顶栏仅剩固定菜单「首页」），
+  // 全部用户菜单在左侧导航栏；点左侧菜单/导航 → 该菜单上架到顶栏并展开其导航行。
+  // 菜单栏展示参数（config.json menu_visible）：0 = 顶栏不渲染该菜单栏（即便已上架）。
+  const visibleMenus = menus.filter((m) => (m.menu_visible ?? 1) !== 0 && pinned.includes(m.name));
 
   if (visibleMenus.length === 0) return null;
 
@@ -221,7 +237,12 @@ export function DynamicMenuNav({ barRef }: { barRef?: React.RefObject<HTMLElemen
   );
 }
 
-/** 单个用户菜单按钮：点击展开/收起 + 右键 重命名/删除 + 拖拽（栏内重排 / 拖出脱离为子窗口） */
+/** 单个用户菜单按钮：点击展开/收起 + 右键 重命名/删除 + 拖拽（栏内重排 / 拖出脱离为子窗口）
+ *
+ *  v2.2.2：悬停时右侧浮现「×」按钮 —— 点击即把该菜单**移回左侧导航栏**
+ *  （等价于右键菜单里的「移到左侧栏」，此处给出更直观的入口）。
+ *  × 按钮是独立元素（不嵌在菜单按钮内），避免与按钮自身的
+ *  pointerdown 拖拽手势（脱离为子窗口）互相干扰。 */
 function DynamicMenuButton({ m, active, barRef, onClick, onInBarDrop, onCtx }: {
   m: { name: string; menu_color?: string; navigation_bar_name: string[] };
   active: boolean;
@@ -239,36 +260,63 @@ function DynamicMenuButton({ m, active, barRef, onClick, onInBarDrop, onCtx }: {
   });
   const detached = useDetachStore((s) => m.name in s.detached);
   const close = useDetachStore((s) => s.close);
+  const navigate = useNavigate();
+
+  /** ×：把该菜单从顶栏收回左侧栏（与右键「移到左侧栏」同语义） */
+  function moveBackToSide() {
+    const st = useMenuStore.getState();
+    const wasActive = st.activeMenu === m.name;
+    st.unpinMenu(m.name);
+    // 该菜单若正是当前展开的 → 顶栏已无它，导航行随之收起 → 路由回首页
+    if (wasActive) navigate("/");
+    useToastStore.getState().push("ok", `菜单栏「${m.name}」已移回左侧导航栏`);
+  }
+
   return (
     <>
-      <button
-        className={
-          "dynamic-menu__btn" +
-          (active ? " active" : "") +
-          (detached ? " dynamic-menu__btn--detached" : "") +
-          (hoverMe ? " dynamic-menu__btn--drop-target" : "")
-        }
-        data-detach-btn={m.name}
-        onPointerDown={startDrag}
-        onClick={(e) => {
-          if (suppressClick()) { e.preventDefault(); return; }
-          if (detached) { e.preventDefault(); close(m.name); return; }
-          onClick(m);
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          onCtx(e.clientX, e.clientY);
-        }}
-        title={
-          detached
-            ? `「${m.name}」已脱离为子窗口，点击收回菜单栏`
-            : `点击${active ? "收起" : "显示"}「${m.name}」；拖动到其它菜单上重排；拖出顶栏脱离为子窗口；右键 重命名/删除`
-        }
-      >
-        <span className="dynamic-menu__dot" style={{ background: m.menu_color || "#2980b9" }} />
-        {m.name}
-        {detached ? <span className="nav-link__detached-tag">已脱离</span> : null}
-      </button>
+      <span className="dynamic-menu__wrap" data-detach-btn={m.name}>
+        <button
+          className={
+            "dynamic-menu__btn" +
+            (active ? " active" : "") +
+            (detached ? " dynamic-menu__btn--detached" : "") +
+            (hoverMe ? " dynamic-menu__btn--drop-target" : "")
+          }
+          data-detach-btn={m.name}
+          onPointerDown={startDrag}
+          onClick={(e) => {
+            if (suppressClick()) { e.preventDefault(); return; }
+            if (detached) { e.preventDefault(); close(m.name); return; }
+            onClick(m);
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            onCtx(e.clientX, e.clientY);
+          }}
+          title={
+            detached
+              ? `「${m.name}」已脱离为子窗口，点击收回菜单栏`
+              : `点击${active ? "收起" : "显示"}「${m.name}」；拖动到其它菜单上重排；拖出顶栏脱离为子窗口；右键 重命名/删除`
+          }
+        >
+          <span className="dynamic-menu__dot" style={{ background: m.menu_color || "#2980b9" }} />
+          {m.name}
+          {detached ? <span className="nav-link__detached-tag">已脱离</span> : null}
+        </button>
+        {/* v2.2.2：悬停时右侧浮现 × —— 收回左侧栏。
+            「已脱离」态下按钮内有角标、右侧无余量，× 不显示（此时点击是收回子窗口）。 */}
+        {detached ? null : (
+          <button
+            className="dynamic-menu__close"
+            title="移回左侧导航栏"
+            aria-label={`将 ${m.name} 移回左侧导航栏`}
+            onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+            onClick={(e) => { e.stopPropagation(); moveBackToSide(); }}
+          >
+            <X size={12} />
+          </button>
+        )}
+      </span>
       {ghost}
     </>
   );

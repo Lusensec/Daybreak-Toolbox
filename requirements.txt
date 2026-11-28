@@ -1,12 +1,16 @@
-fastapi
-uvicorn[standard]
-websockets
+# 破晓·工具箱 运行时依赖（v2.1.4：桥接服务改用标准库，服务端零第三方框架）
 pystray
 pywebview
 Pillow
 # Windows 托盘图标渲染（pywin32 仅 Windows 安装；CI 各平台 runner 按标记处理）
 pywin32; sys_platform == "win32"
 
+# 已移除（v2.1.4 架构瘦身）：桥接服务从「FastAPI + uvicorn + WebSocket」换成
+#   stdlib ThreadingHTTPServer + SSE（bridge/server.py）—— 单进程、单客户端、127.0.0.1
+#   的极简 RPC 不值得常驻一整套 ASGI 栈（安装包内约 13MB，另加 uvicorn 启动开销）：
+#   fastapi / uvicorn[standard] / websockets  → 其传递依赖 starlette、pydantic(+core)、
+#   anyio、sniffio、watchfiles、httptools、h11、click、uvloop 一并消失。
+#
 # 已移除（v2.1.3 功能瘦身：AI 对话 / 终端管理 / 编解码 / 汉英翻译 / 临时笔记 五个面板整体删除）：
 #   openai         —— 仅 ai_service.py 使用
 #   requests       —— 仅 ai_config.py / fanyi.py / encryption.py 使用（update_service 走 urllib）

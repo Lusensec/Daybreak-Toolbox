@@ -1,15 +1,15 @@
 /**
- * 破晓·工具箱 —— 前端最小 WS 客户端
+ * 破晓·工具箱 —— 前端桥接客户端（v2.1.4：HTTP + SSE，替换原 WebSocket）
  *
- * 职责（Phase 0 骨架）：
- *  - 连接 ws://<host>:<port>/ws?token=***
- *  - 断线指数退避重连（1/2/4/8/16/30s 封顶）
- *  - 15s 心跳（ping）
- *  - 事件分发到 zustand connection store
+ * 为什么改：
+ *  - 后端已把 FastAPI/uvicorn/WebSocket 换掉（省 ~13MB 与一段启动开销），
+ *    通信退化成「一条 POST /api/rpc + 一条 GET /api/events(SSE)」；
+ *  - 对外导出签名保持不变（connectBridge / sendCommand / subscribeEvent / fetchBridgeToken /
+ *    disconnectBridge / useConnStore），所有调用点无需改动。
  *
- * 事件信封与 bridge/ws.py 对齐：
+ * 信封与 bridge/server.py 对齐（仍是旧 WS 那套，故事件订阅与错误码逻辑照旧）：
  *   请求 {"v":1,"id","type","payload"} → 响应 {"v":1,"id","type":"ack|err","payload"}
- *   事件 {"v":1,"type","payload"}
+ *   事件 {"v":1,"type","payload"}      → SSE 的 data: 行
  */
 import { create } from "zustand";
 
@@ -49,7 +49,18 @@ export function subscribeEvent(type: string, handler: EventHandler): () => void 
   };
 }
 
-/** 读 token：生产由 entry.py 注入 localStorage；dev 用 VITE_BRIDGE_TOKEN 或手动 */
+/** 桥接基址：生产（webview 同源托管）用相对路径；dev（vite 5173）指向本地桥接端口 */
+const BRIDGE_ORIGIN = import.meta.env.DEV
+  ? ((import.meta.env.VITE_BRIDGE_URL as string | undefined) ?? "http://127.0.0.1:8765")
+  : "";
+
+let _token = "";
+let _es: EventSource | null = null;
+let _closed = true;              // 未连接
+let _reconnectDelay = 1000;
+let _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 读 token：生产由 /api/token 注入；dev 用 VITE_BRIDGE_TOKEN 或手动输入 */
 function getDevToken(): string {
   try {
     const fromEnv = import.meta.env.VITE_BRIDGE_TOKEN as string | undefined;
@@ -66,25 +77,25 @@ interface BridgeOpts {
   token?: string;
 }
 
-let _ws: WebSocket | null = null;
-let _closed = false;
-let _reconnectDelay = 1000;
-let _hbTimer: ReturnType<typeof setInterval> | null = null;
+function apiUrl(path: string): string {
+  return `${BRIDGE_ORIGIN}${path}`;
+}
+
+/** 是否已连上（SSE 处于 OPEN 且拿到过 token） */
+function isOnline(): boolean {
+  return !!_es && _es.readyState === EventSource.OPEN;
+}
 
 const WAIT_CONNECT_MS = 15000;
 
-function isWsReady(): boolean {
-  return !!_ws && _ws.readyState === WebSocket.OPEN;
-}
-
 /**
- * 等待桥接 WS 上线（status → online 且 ws OPEN）。
- * 已就绪立即 resolve；否则订阅状态变化，直到上线或超时（超时 reject "ws not connected"）。
- * 用于消除「面板挂载时 WS 尚未 OPEN」的时序竞态（旧版 sendCommand 直接拒绝导致 加载失败）。
+ * 等待桥接上线（status → online 且 SSE OPEN）。
+ * 已就绪立即 resolve；否则订阅状态变化，直到上线或超时。
+ * 保留此语义：面板挂载时桥接可能尚未就绪（旧版 WS 时序竞态的经验）。
  */
 function waitForOnline(timeoutMs: number = WAIT_CONNECT_MS): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (isWsReady()) { resolve(); return; }
+    if (isOnline()) { resolve(); return; }
     let done = false;
     let unsub: (() => void) | undefined;
     const finish = (ok: boolean, msg?: string) => {
@@ -92,78 +103,70 @@ function waitForOnline(timeoutMs: number = WAIT_CONNECT_MS): Promise<void> {
       done = true;
       clearTimeout(timer);
       unsub?.();
-      if (ok) resolve(); else reject(new Error(msg ?? "ws not connected"));
+      if (ok) resolve(); else reject(new Error(msg ?? "bridge not connected"));
     };
-    const timer = setTimeout(() => finish(false, "ws not connected"), timeoutMs);
+    const timer = setTimeout(() => finish(false, "bridge not connected"), timeoutMs);
     unsub = useConnStore.subscribe((state, prev) => {
       if (state.status === "online" && prev.status !== "online") {
-        // 留一个宏任务让 ws 真正 OPEN
-        setTimeout(() => finish(isWsReady()), 0);
+        setTimeout(() => finish(isOnline()), 0);
       }
     });
-    // 若此刻已 online（但 ws 尚在 settle），也立即收一次
     if (useConnStore.getState().status === "online") {
-      setTimeout(() => finish(isWsReady()), 0);
+      setTimeout(() => finish(isOnline()), 0);
     }
   });
 }
 
-/** 发送命令并等待 ack/err（Promise 封装）。WS 未就绪时会先等待桥接上线再发送。
- *  timeoutMs：等待 ack 的超时（默认 15s）。长命令（shell.run/ssh.run 后端最长
- *  60s + 重试预算）需传更大值，否则前端先于后端超时 → 误报「cmd xxx timeout」。 */
-export async function sendCommand(type: string, payload: Record<string, unknown> = {}, timeoutMs: number = 15000): Promise<Record<string, unknown>> {
+/**
+ * 发送命令并等待 ack/err（Promise 封装）。桥接未就绪时先等待上线再发送。
+ * timeoutMs：每次请求的超时（默认 15s；长命令由调用方传更大值）。
+ * 注意：window.move 这类高频命令每帧一次请求 —— fetch 走同源 keep-alive 连接复用，
+ * 且调用方已有「至多一笔在途」背压，不会打爆连接池。
+ */
+export async function sendCommand(
+  type: string,
+  payload: Record<string, unknown> = {},
+  timeoutMs: number = 15000,
+): Promise<Record<string, unknown>> {
   await waitForOnline();
-  return new Promise((resolve, reject) => {
-    if (!isWsReady()) {
-      reject(new Error("ws not connected"));
-      return;
-    }
-    const id = crypto.randomUUID();
-    const timer = setTimeout(() => reject(new Error(`cmd ${type} timeout`)), Math.max(1000, timeoutMs));
-    const onMsg = (ev: MessageEvent) => {
-      try {
-        const msg = JSON.parse(ev.data as string) as { id?: string; type?: string; payload?: unknown };
-        if (msg.id === id) {
-          clearTimeout(timer);
-          _ws?.removeEventListener("message", onMsg);
-          if (msg.type === "ack") resolve((msg.payload ?? {}) as Record<string, unknown>);
-          else reject(new Error(String((msg.payload as { message?: string })?.message ?? msg.type)));
-        }
-      } catch {
-        /* 非本 id 的消息，忽略 */
-      }
-    };
-    _ws!.addEventListener("message", onMsg);
-    _ws!.send(JSON.stringify({ v: 1, id, type, payload }));
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Math.max(1000, timeoutMs));
+  try {
+    const resp = await fetch(apiUrl("/api/rpc"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Bridge-Token": _token },
+      body: JSON.stringify({ v: 1, id: crypto.randomUUID(), type, payload }),
+      signal: ctrl.signal,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const msg = (await resp.json()) as { type?: string; payload?: any };
+    if (msg.type === "ack") return (msg.payload ?? {}) as Record<string, unknown>;
+    const detail = msg?.payload?.message || msg?.payload?.code || msg.type || `HTTP ${resp.status}`;
+    throw new Error(String(detail));
+  } catch (e) {
+    if ((e as Error).name === "AbortError") throw new Error(`cmd ${type} timeout`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-export async function connectBridge(opts: BridgeOpts = {}): Promise<void> {
-  const host = opts.host ?? "127.0.0.1";
-  const port = opts.port ?? 8765;
-  const token = opts.token ?? getDevToken();
-  _closed = false;
-  const url = `ws://${host}:${port}/ws?token=${token}`;
-  useConnStore.setState((s) => ({ ...s, status: token ? "connecting" : "disconnected" }));
+/** 建立事件流（SSE 自带断线重连；这里只负责首次握手与状态同步） */
+function openEvents(): void {
+  closeEvents();
+  const url = `${apiUrl("/api/events")}?token=${encodeURIComponent(_token)}`;
+  const es = new EventSource(url);
+  _es = es;
 
-  if (!token) {
-    useConnStore.setState({ status: "disconnected", lastError: "no token (set VITE_BRIDGE_TOKEN or localStorage.daybreak.token)" });
-    return;
-  }
-
-  _ws = new WebSocket(url);
-
-  _ws.onopen = () => {
+  es.onopen = () => {
     _reconnectDelay = 1000;
     useConnStore.setState({ status: "online", lastError: null });
-    _startHeartbeat();
   };
 
-  _ws.onmessage = (ev) => {
-    // 事件分发（无 id 的为服务端事件）
+  es.onmessage = (ev) => {
     try {
-      const msg = JSON.parse(ev.data as string) as { type?: string; payload?: unknown; id?: string };
-      if (msg.type && msg.id === undefined) {
+      const msg = JSON.parse(ev.data as string) as { type?: string; payload?: unknown };
+      if (msg.type) {
         const handlers = useConnStore.getState()._subs.get(msg.type);
         handlers?.forEach((h) => {
           try { h(msg.payload ?? {}); } catch { /* handler 异常不影响其它 */ }
@@ -174,26 +177,62 @@ export async function connectBridge(opts: BridgeOpts = {}): Promise<void> {
     }
   };
 
-  _ws.onclose = () => {
-    _stopHeartbeat();
+  es.onerror = () => {
+    // EventSource 会自行重连；这里只把状态打回 reconnecting（UI 角标提示）
     if (_closed) return;
     useConnStore.setState({ status: "reconnecting" });
-    setTimeout(() => connectBridge(opts), _reconnectDelay);
-    _reconnectDelay = Math.min(_reconnectDelay * 2, 30000);
-  };
-
-  _ws.onerror = () => {
-    _ws?.close();
+    // 浏览器在 4xx/网络彻底不可用时会停止自动重连 → 用退避定时器兜底重启
+    if (es.readyState === EventSource.CLOSED) {
+      closeEvents();
+      if (_reconnectTimer) clearTimeout(_reconnectTimer);
+      _reconnectTimer = setTimeout(() => {
+        if (_closed) return;
+        _reconnectDelay = Math.min(_reconnectDelay * 2, 30000);
+        void connectBridge({ token: _token });
+      }, _reconnectDelay);
+    }
   };
 }
 
+function closeEvents(): void {
+  if (_es) {
+    _es.onopen = null;
+    _es.onmessage = null;
+    _es.onerror = null;
+    _es.close();
+    _es = null;
+  }
+}
+
+export async function connectBridge(opts: BridgeOpts = {}): Promise<void> {
+  const token = opts.token ?? getDevToken();
+  _closed = false;
+  useConnStore.setState({ status: "connecting" });
+
+  if (!token) {
+    useConnStore.setState({ status: "disconnected", lastError: "no token" });
+    return;
+  }
+  _token = token;
+
+  try {
+    const r = await fetch(apiUrl("/api/ping"), { cache: "no-store" });
+    if (!r.ok) throw new Error(`ping ${r.status}`);
+  } catch (e) {
+    useConnStore.setState({ status: "disconnected", lastError: `桥接服务不可达：${String(e)}` });
+    return;
+  }
+
+  openEvents();
+  if (token) localStorage.setItem("daybreak.token", token);
+}
+
 /**
- * 生产/bridge 自托管模式：从同源 /api/token 取 token（bridge/main.py 提供）。
- * 失败返回空串，由调用方决定提示。
+ * 生产（webview 同源）/ dev：取 token。失败返回空串，由调用方决定提示。
  */
 export async function fetchBridgeToken(): Promise<string> {
   try {
-    const r = await fetch("/api/token");
+    const r = await fetch(apiUrl("/api/token"), { cache: "no-store" });
     if (!r.ok) return "";
     const j = (await r.json()) as { token?: string };
     return typeof j.token === "string" ? j.token : "";
@@ -204,22 +243,7 @@ export async function fetchBridgeToken(): Promise<string> {
 
 export function disconnectBridge(): void {
   _closed = true;
-  _stopHeartbeat();
-  _ws?.close();
-  _ws = null;
+  if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
+  closeEvents();
   useConnStore.setState({ status: "disconnected" });
-}
-
-function _startHeartbeat() {
-  _stopHeartbeat();
-  _hbTimer = setInterval(() => {
-    if (_ws?.readyState === WebSocket.OPEN) {
-      _ws.send(JSON.stringify({ v: 1, id: crypto.randomUUID(), type: "ping", payload: {} }));
-    }
-  }, 15000);
-}
-
-function _stopHeartbeat() {
-  if (_hbTimer) clearInterval(_hbTimer);
-  _hbTimer = null;
 }
