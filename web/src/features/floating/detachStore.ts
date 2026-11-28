@@ -8,7 +8,7 @@ import { create } from "zustand";
  * AI 对话/终端管理/临时笔记 等全局单例状态在多窗间共享（用户已确认允许）。
  */
 interface DetachState {
-  detached: Record<string, { x: number; y: number; w: number; h: number }>;
+  detached: Record<string, { x: number; y: number; w: number; h: number; native?: boolean }>;
   zOrder: string[];
   /** 拖拽中「插入位」高亮的目标菜单名（被悬停的那一个），null = 无 */
   hoverTarget: string | null;
@@ -17,6 +17,8 @@ interface DetachState {
   /** 进入全屏前的原尺寸（退出全屏时恢复） */
   prevRects: Record<string, { x: number; y: number; w: number; h: number }>;
   open: (name: string, x: number, y: number) => void;
+  /** v2.3.2：标记为「已由独立 OS 窗口承载」（不渲染 HTML 浮层，仅保留已脱离态） */
+  markNative: (key: string) => void;
   close: (name: string) => void;
   move: (name: string, x: number, y: number) => void;
   /** 拉伸（右下角把手）：w/h 钳制在 [FLOAT_MIN, min(FLOAT_MAX, 视口)]，x/y 随新尺寸收拢 */
@@ -63,8 +65,17 @@ export const useDetachStore = create<DetachState>((set, get) => ({
     const h = Math.min(FLOAT_H, window.innerHeight - 16);
     const p = clampFloatPos(x, y, w, h);
     set({
-      detached: { ...s.detached, [name]: { x: p.x, y: p.y, w, h } },
+      detached: { ...s.detached, [name]: { x: p.x, y: p.y, w, h, native: false } },
       zOrder: [...s.zOrder.filter((n) => n !== name), name],
+    });
+  },
+
+  markNative(key) {
+    const s = get();
+    if (s.detached[key]?.native) return;
+    set({
+      detached: { ...s.detached, [key]: { x: 0, y: 0, w: 0, h: 0, native: true } },
+      zOrder: [...s.zOrder.filter((n) => n !== key), key],
     });
   },
 

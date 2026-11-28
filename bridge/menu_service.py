@@ -51,6 +51,7 @@ _CONFIG_PATH = _PROJECT_ROOT / "config" / "config.json"
 RUN_TYPES = ["直接打开", "命令行打开", "文件夹打开", "链接打开", "下载链接"]
 _LINK_TYPES = ("下载链接", "链接打开")
 _FIXED_VISIBLE_KEY = "__fixed_menu_visible__"
+_HOME_TOOLS_KEY = "__home_tools__"     # v2.2.5：首页固定工具（[{"menu":…, "name":…}]，保持加入顺序）
 _CONFIG_BACKUP = "config.json.bak"  # 迁移前自动备份（同目录）
 
 
@@ -492,3 +493,122 @@ def update_tool_path(menu: str, name: str, new_path: str) -> dict:
 def changed_snapshot() -> dict:
     """menu.changed 事件 payload：全量菜单（前端据此重建路由）。"""
     return {"menus": list_menus()}
+
+
+# ---- v2.2.5：工具右键编辑 / 栏内排序 / 首页固定 ----
+def update_tool(menu: str, name: str, new_name: str | None = None,
+                new_path: str | None = None, run_type: str | None = None,
+                command: str | None = None) -> dict:
+    """编辑工具右键四项：名称 / 路径 / 运行方式 / 启动命令（只改传入的字段）。
+    校验语义与 add_tool 一致：名称全菜单唯一；命令行打开需 * 占位；链接类需 http。
+    注意：工具名在 add_tool 时即全菜单唯一，这里按名定位必然只命中一条。"""
+    cfg = load_config()
+    entry = cfg.get(menu)
+    if entry is None:
+        raise MenuError("MENU_NOT_FOUND", f"菜单 {menu} 不存在")
+    hit: dict | None = None
+    for tools in _navs(entry).values():
+        for t in tools:
+            if t.get("工具名称") == name:
+                hit = t
+                break
+        if hit:
+            break
+    if hit is None:
+        raise MenuError("TOOL_NOT_FOUND", f"工具 {name} 不存在")
+
+    eff_name = (new_name if new_name is not None else str(hit.get("工具名称", ""))).strip()
+    eff_path = (new_path if new_path is not None else str(hit.get("工具路径", ""))).strip()
+    eff_type = (run_type if run_type is not None else str(hit.get("启动方式", ""))).strip()
+    eff_cmd = (command if command is not None else str(hit.get("工具命令", "")))
+    if not eff_name:
+        raise MenuError("INTERNAL", "工具名称不能为空")
+    if eff_type not in RUN_TYPES:
+        raise MenuError("INTERNAL", f"未知启动方式 {eff_type}")
+    if eff_type == "命令行打开" and "*" not in eff_cmd:
+        raise MenuError("INTERNAL", "命令行打开的启动命令需用 * 占位工具名/路径")
+    if eff_type in _LINK_TYPES and "http" not in eff_path:
+        raise MenuError("INTERNAL", f"{eff_type} 的工具路径需是 http(s) 链接")
+    # 改名：全菜单查重（排除自身）
+    if eff_name != name:
+        for t in _menu_tools(entry):
+            if t.get("工具名称") == eff_name:
+                raise MenuError("TOOL_NAME_EXISTS", f"工具名称 {eff_name} 已存在")
+
+    hit["工具名称"] = eff_name
+    hit["工具路径"] = eff_path
+    hit["启动方式"] = eff_type
+    hit["工具命令"] = eff_cmd
+    _atomic_write_json(_CONFIG_PATH, cfg)
+    return {"menu": menu, "old_name": name, "name": eff_name,
+            "工具路径": eff_path, "启动方式": eff_type, "工具命令": eff_cmd}
+
+
+def reorder_tools(menu: str, nav: str, order: list[str]) -> dict:
+    """导航栏内工具排序：order = 该导航全部工具名的新排列（集合必须一致）。"""
+    cfg = load_config()
+    entry = cfg.get(menu)
+    if entry is None:
+        raise MenuError("MENU_NOT_FOUND", f"菜单 {menu} 不存在")
+    navs = _navs(entry)
+    if nav not in navs:
+        raise MenuError("NAV_NOT_FOUND", f"导航栏 {nav} 不存在")
+    cur = [str(t.get("工具名称", "")) for t in navs[nav]]
+    if len(order) != len(cur) or set(order) != set(cur):
+        raise MenuError("INTERNAL", "排序列表与当前工具集合不一致")
+    by_name = {str(t.get("工具名称", "")): t for t in navs[nav]}
+    navs[nav] = [by_name[n] for n in order]
+    entry["navigation_bar_name"] = navs
+    _atomic_write_json(_CONFIG_PATH, cfg)
+    return {"menu": menu, "nav": nav, "order": order}
+
+
+def home_tools() -> list[dict]:
+    """首页固定工具（原始 pin 列表）：
+    - 顺带**剪枝**：指向已删除工具的 pin 自动剔除并回写（避免幽灵卡）
+    - 返回 [{menu, name}]，顺序 = 加入顺序"""
+    cfg = load_config()
+    pins = cfg.get(_HOME_TOOLS_KEY)
+    if not isinstance(pins, list):
+        return []
+    exist = {(m, t.get("工具名称"))
+             for m, entry in _menu_items(cfg)
+             for t in _menu_tools(entry)}
+    kept = [p for p in pins
+            if isinstance(p, dict) and (str(p.get("menu", "")), str(p.get("name", ""))) in exist]
+    if len(kept) != len(pins):
+        cfg[_HOME_TOOLS_KEY] = kept
+        _atomic_write_json(_CONFIG_PATH, cfg)
+    return [{"menu": str(p["menu"]), "name": str(p["name"])} for p in kept]
+
+
+def home_tool_add(menu: str, name: str) -> dict:
+    """把工具固定到首页（幂等：已固定则原样返回）。"""
+    # 工具必须真实存在（防手滑传错参数产生幽灵 pin）
+    entry = get_menu_entry(menu)
+    if not any(t.get("工具名称") == name for t in _menu_tools(entry)):
+        raise MenuError("TOOL_NOT_FOUND", f"工具 {name} 不存在")
+    cfg = load_config()
+    pins = cfg.get(_HOME_TOOLS_KEY)
+    if not isinstance(pins, list):
+        pins = []
+    key = (menu, name)
+    if not any(isinstance(p, dict) and (str(p.get("menu")), str(p.get("name"))) == key for p in pins):
+        pins.append({"menu": menu, "name": name})
+        cfg[_HOME_TOOLS_KEY] = pins
+        _atomic_write_json(_CONFIG_PATH, cfg)
+    return {"menu": menu, "name": name, "pinned": True}
+
+
+def home_tool_remove(menu: str, name: str) -> dict:
+    """把工具从首页移除（幂等：未固定也返回成功）。"""
+    cfg = load_config()
+    pins = cfg.get(_HOME_TOOLS_KEY)
+    if isinstance(pins, list):
+        kept = [p for p in pins
+                if not (isinstance(p, dict)
+                        and str(p.get("menu", "")) == menu and str(p.get("name", "")) == name)]
+        if len(kept) != len(pins):
+            cfg[_HOME_TOOLS_KEY] = kept
+            _atomic_write_json(_CONFIG_PATH, cfg)
+    return {"menu": menu, "name": name, "pinned": False}

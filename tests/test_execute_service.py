@@ -194,3 +194,43 @@ def test_resolve_download_loaded_is_kind4(root):
     t = {"工具名称": "d", "工具路径": "d/d.zip", "启动方式": "下载链接", "工具命令": ""}
     kind, resolved = execute_service._resolve(t, "红队", "首页")
     assert kind == 4
+
+
+# ---- v2.2.5：打开所在文件夹（_tool_folder_target 纯解析）----
+
+def test_folder_target_link_rejected(root):
+    """链接类工具没有本地文件夹 → TOOL_NO_FOLDER。"""
+    from bridge.execute_service import ToolError
+    tool = {"工具名称": "home1", "工具路径": "http://x.com/h", "启动方式": "链接打开", "工具命令": ""}
+    with pytest.raises(ToolError) as cm:
+        execute_service._tool_folder_target(tool, "红队", "首页")
+    assert cm.value.code == "TOOL_NO_FOLDER"
+
+
+def test_folder_target_relative_file_selects_parent(root):
+    """相对路径文件：选中该文件、打开其父目录（菜单/导航 目录树解析）。"""
+    f = root / "红队" / "扫描" / "sub" / "rel1.exe"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("x", encoding="utf-8")
+    tool = {"工具名称": "rel1", "工具路径": "sub/rel1.exe", "启动方式": "直接打开", "工具命令": ""}
+    select, open_dir = execute_service._tool_folder_target(tool, "红队", "扫描")
+    assert Path(select) == f
+    assert Path(open_dir) == f.parent
+
+
+def test_folder_target_dir_opens_itself(root):
+    """文件夹打开类工具：目标目录即打开目录。"""
+    d = root / "红队" / "扫描" / "toolkit"
+    d.mkdir(parents=True, exist_ok=True)
+    tool = {"工具名称": "kit", "工具路径": "toolkit", "启动方式": "文件夹打开", "工具命令": ""}
+    select, open_dir = execute_service._tool_folder_target(tool, "红队", "扫描")
+    assert Path(select) == d and Path(open_dir) == d
+
+
+def test_folder_target_missing(root):
+    """路径不存在 → TOOL_FOLDER_MISSING。"""
+    from bridge.execute_service import ToolError
+    tool = {"工具名称": "ghost", "工具路径": "no/such.exe", "启动方式": "直接打开", "工具命令": ""}
+    with pytest.raises(ToolError) as cm:
+        execute_service._tool_folder_target(tool, "红队", "扫描")
+    assert cm.value.code == "TOOL_FOLDER_MISSING"

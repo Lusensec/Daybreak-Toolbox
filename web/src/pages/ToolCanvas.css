@@ -64,14 +64,21 @@
   transform: scale(1.05);
 }
 
-/* 工具按钮网格：旧版 canvas 每行 5-6 个 */
+/* 工具按钮网格：旧版 canvas 每行 5-6 个。
+   v2.2.5：padding + 负 margin —— 卡片 hover 时 translateY(-1px)，旧版顶行蓝框
+   会被 overflow:auto 的滚动口裁掉（「蓝色边框被吞没」的根因）；留出上移空间即可 */
 .tool-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 12px;
   overflow: auto;
   align-content: start;
+  padding: 3px 4px 8px;
+  margin: -3px -4px -8px;
 }
+/* 拖拽中：禁文本选中（按住卡片拖动时避免划选页面文字） */
+.tool-grid.is-dragging { cursor: grabbing; }
+.tool-grid.is-dragging .tool-btn { user-select: none; }
 
 .tool-btn {
   display: flex;
@@ -98,8 +105,77 @@
   background: var(--panel);
   color: var(--muted);
 }
+/* v2.2.5：拖拽中的卡片——半透明 + 不拦截命中测试（elementFromPoint 要穿过去找下方卡片） */
+.tool-btn--dragging {
+  opacity: 0.4;
+  pointer-events: none;
+  border-style: dashed;
+}
 .tool-btn__name { font-weight: 600; word-break: break-all; }
 .tool-btn__meta { font-size: 11px; color: var(--muted); }
+
+/* ===== v2.2.5：修改运行方式单选组 / 工具属性 ===== */
+.tool-radios {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+.tool-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.tool-radio:hover { border-color: var(--accent); }
+.tool-radio.is-active {
+  border-color: var(--accent);
+  background: var(--accent-lo);
+  color: var(--accent);
+  font-weight: 600;
+}
+.tool-radio input[type="radio"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.tool-props {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 10px;
+}
+.tool-props__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 5px 4px;
+  border-bottom: 1px dashed var(--border);
+  font-size: 13px;
+}
+.tool-props__row:last-child { border-bottom: none; }
+.tool-props__k {
+  flex: 0 0 72px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.9;
+}
+.tool-props__v { color: var(--text); line-height: 1.7; word-break: break-all; }
+.tool-props__v--wrap { max-width: 360px; }
+.tool-props__ok { color: var(--success); }
+.tool-props__bad { color: var(--error); }
 
 .tool-notice {
   position: absolute;

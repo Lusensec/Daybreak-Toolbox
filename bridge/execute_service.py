@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .menu_service import (load_config, get_menu_entry, update_tool_path,
-                           MenuError, RUN_TYPES, project_root)
+                           home_tools, MenuError, RUN_TYPES, project_root)
 
 # 项目根取自 menu_service（单一真相源：set_root 同时约束 工具读写 与 路径解析）
 
@@ -78,6 +78,67 @@ def tool_active(tool: dict, menu: str, nav: str) -> bool:
         return kind == 3 or os.path.exists(
             str(_root() / menu / nav / str(tool.get("工具路径", "")).replace("/", os.sep)))
     return os.path.exists(resolved)
+
+
+def _tool_folder_target(tool: dict, menu: str, nav: str) -> tuple[str, str]:
+    """v2.2.5「打开所在文件夹」：解析工具 → (选中目标, 要打开的目录)。
+    - 链接类 / 未下载 → ToolError
+    - 文件 → 选中该文件、打开其父目录；目录 → 打开目录本身
+    纯解析函数（不弹资源管理器），可单测。"""
+    path = str(tool.get("工具路径", ""))
+    if "http" in path:
+        raise ToolError("TOOL_NO_FOLDER", "链接类工具没有本地文件夹")
+    kind, _resolved = _resolve(tool, menu, nav)
+    if kind == 3:
+        raise ToolError("TOOL_NO_FOLDER", "安装包尚未下载，没有本地文件夹")
+    # kind 2（相对路径）/ kind 4（已下载回写的相对路径）都要拼 菜单/导航 目录树；
+    # kind 1 绝对路径直接用（_resolve 对绝对路径原样返回）
+    if kind == 1:
+        target = path
+    else:
+        target = str(_root() / menu / nav / Path(path).as_posix().replace("/", os.sep))
+    if not target or not os.path.exists(target):
+        raise ToolError("TOOL_FOLDER_MISSING", f"路径不存在：{target or path}")
+    if os.path.isdir(target):
+        return target, target
+    parent = os.path.dirname(os.path.abspath(target)) or target
+    return target, parent
+
+
+def open_tool_folder(menu: str, name: str) -> dict:
+    """在系统资源管理器中打开工具所在文件夹（文件则定位选中）。"""
+    tool, nav = _find_tool(menu, name)
+    select, open_dir = _tool_folder_target(tool, menu, nav)
+    import sys as _sys
+    if _sys.platform == "win32":
+        if os.path.isdir(select):
+            os.startfile(select)  # noqa: S606 —— 目录打开
+        else:
+            # explorer /select 定位到文件（注意 /select, 后必须直接跟路径，无空格）
+            subprocess.Popen(["explorer", f"/select,{select}"])
+    elif _sys.platform == "darwin":
+        subprocess.Popen(["open", open_dir])
+    else:
+        subprocess.Popen(["xdg-open", open_dir])
+    return {"ok": True, "folder": open_dir, "selected": select}
+
+
+def home_tools_detailed() -> list[dict]:
+    """首页固定工具卡（v2.2.5）：pin 列表 + 每条的展示信息（菜单/导航/启动方式/置灰）。"""
+    out = []
+    for pin in home_tools():
+        try:
+            tool, nav = _find_tool(str(pin["menu"]), str(pin["name"]))
+        except ToolError:
+            continue  # home_tools 刚剪枝过，这里理论不可达；防御性跳过
+        m = str(pin["menu"])
+        out.append({
+            "menu": m, "name": str(pin["name"]), "nav": nav,
+            "启动方式": str(tool.get("启动方式", "")),
+            "工具路径": str(tool.get("工具路径", "")),
+            "active": tool_active(tool, m, nav),
+        })
+    return out
 
 
 def run_tool(menu: str, name: str) -> dict:

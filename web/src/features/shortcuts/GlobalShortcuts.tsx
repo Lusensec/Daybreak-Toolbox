@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router";
 import { useMenuStore } from "../menu/store";
 import { FIXED_MENUS } from "../menu/fixedMenus";
-import { sendCommand } from "../../services/ws";
+import { launchTool } from "../browser/launch";
 import { useToastStore } from "../../components/toast";
 import { useSettingsModal } from "../../store/settingsModal";
 import { useShortcutsStore } from "./store";
@@ -107,8 +107,10 @@ function dispatchSlot(slot: string, st: ReturnType<typeof useMenuStore.getState>
     if (sep < 0) return;
     const menu = rest.slice(0, sep);
     const name = rest.slice(sep + 2);
-    void sendCommand("tool.run", { menu, name })
-      .then((r) => toast.push("ok", `已启动「${name}」：${String(r.message ?? "OK")}`))
+    // 统一启动入口：优先用菜单元数据里的启动方式与路径（链接打开走内置浏览器）
+    const meta = st.tools[menu]?.find((t) => t.name === name);
+    void launchTool(menu, name, navigate, { runType: meta?.runType, url: meta?.path })
+      .then((r) => toast.push("ok", r.message))
       .catch((err) => toast.push("err", `启动「${name}」失败：${err instanceof Error ? err.message : String(err)}`));
   }
 }

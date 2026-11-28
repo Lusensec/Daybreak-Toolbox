@@ -44,10 +44,13 @@ E_INTERNAL = "INTERNAL"
 E_NOT_FOUND = "NOT_FOUND"
 E_BUSY = "BRIDGE_BUSY"
 
-# 高频窗口几何命令：不参与串行锁（顶栏拖拽 60fps 连发，排队会让拖动变卡）
+# 高频/长事务窗口几何命令：不参与串行锁（顶栏拖拽 60fps 连发，排队会让拖动变卡；
+# 浮动窗口创建/拖动会阻塞到用户松手，绝不能占住全局写锁）
 UNTETHERED_COMMANDS = frozenset({
     "window.move", "window.get_rect", "window.maximize", "window.minimize",
     "window.set_background", "window.drag",
+    "float.create", "float.move", "float.maximize", "float.drag_begin", "float.resize", "float.focus",
+    "browser.attach_float", "browser.set_float_rect",
 })
 
 
@@ -129,6 +132,11 @@ class BridgeBus:
             self._subs.discard(q)
 
     async def broadcast(self, event: str, payload: dict) -> None:
+        self.emit(event, payload)
+
+    def emit(self, event: str, payload: dict) -> None:
+        """同步广播（线程安全）：供 UI 线程回调（如浮动窗口关闭）直接调用，
+        无需回到 asyncio loop 里 await。"""
         frame = {"v": 1, "type": event, "payload": payload}
         with self._subs_lock:
             targets = list(self._subs)
@@ -136,7 +144,7 @@ class BridgeBus:
             try:
                 q.put_nowait(frame)
             except queue.Full:
-                # 慢客户端（或已断开）→ 丢弃该帧，绝不阻塞 handler
+                # 慢客户端（或已断开）→ 丢弃该帧，绝不阻塞调用方
                 pass
 
 

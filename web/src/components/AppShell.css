@@ -13,8 +13,8 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 0 16px;
-  height: 48px;
+  padding: 0 12px;
+  height: var(--top-row-h);   /* 与左侧侧栏头部同行高，保证上下边界严格对齐 */
   flex: 0 0 auto;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
@@ -219,6 +219,47 @@
 .nav-bar-row__btn:active { cursor: grabbing; }
 .nav-bar-row__btn.drop-target { background: var(--accent-lo); box-shadow: inset 2px 0 0 var(--accent); }
 
+/* ---- 内置浏览器标签行（/browser/* 路由下替代普通导航行）----
+   标签按钮 + 右侧 × 组成一组：按钮预留 22px 右侧内边距，× 常驻隐藏、悬停浮现，
+   避免标签宽度在悬停时抖动（与顶栏动态菜单的 × 同款交互）。 */
+.browser-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.browser-tab .nav-bar-row__btn { padding-right: 22px; }
+.browser-tab__close {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+/* 悬停标签（或 × 自身）时显示关闭按钮 */
+.browser-tab:hover .browser-tab__close,
+.browser-tab__close:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.browser-tab__close:hover {
+  background: var(--error);
+  color: #fff;
+}
+
 /* 右侧操作区：工具箱设置 + 窗口控件（v2.0.9 起顶栏无主题切换钮：主题在 工具箱设置→通用设置→外观 配置） */
 .menu-bar-right {
   display: flex;
@@ -405,6 +446,13 @@
 .ctx-menu__item:hover { background: var(--heading-active); }
 .ctx-menu__item.danger { color: var(--error); }
 .ctx-menu__item.danger:hover { background: var(--error); color: #fff; }
+/* v2.2.5：菜单分组分隔线（工具右键菜单按功能分四组） */
+.ctx-menu__sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
+  pointer-events: none;
+}
 
 /* ---- 通用右下角拉伸把手（设置模态框 / 浮动子窗口共用；配套 hooks/useResize.ts） ---- */
 .resize-grip {

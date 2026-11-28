@@ -137,3 +137,30 @@
 .home-menus .home-tile__icon { background: transparent; }
 .spin { animation: hm-rot 0.8s linear infinite; }
 @keyframes hm-rot { to { transform: rotate(360deg); } }
+
+/* ===== v2.2.5：置顶工具卡（工具画布右键「加入首页」固定到这里）===== */
+.home-tile--tool {
+  position: relative;
+  text-align: left;
+  font-family: var(--font-ui);
+  cursor: pointer;
+}
+/* 路径失效的工具置灰（与画布 tool-btn--disabled 同语义） */
+.home-tile--tool-off { opacity: 0.5; cursor: not-allowed; }
+/* 右上角悬浮 × ：hover 卡片时浮现，点击移出首页（不触发启动） */
+.home-tile__unpin {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.home-tile--tool:hover .home-tile__unpin { opacity: 1; }
+.home-tile__unpin:hover { background: var(--error); color: #fff; }

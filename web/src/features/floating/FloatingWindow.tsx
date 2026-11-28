@@ -13,7 +13,8 @@ export function FloatingWindowHost() {
   // 选择器必须返回**稳定引用**（detached 对象本身，仅 open/close/move/resize 时变）。
   // 不能在此 Object.keys（每次返回新数组 → useSyncExternalStore 快照恒变 → 无限渲染 React #185）
   const detached = useDetachStore((s) => s.detached);
-  const names = Object.keys(detached);
+  // v2.3.2：native=true 的条目已由独立 OS 窗口绘制，不能再渲染 HTML 浮层（否则重影）
+  const names = Object.keys(detached).filter((n) => !detached[n].native);
   if (names.length === 0) return null;
   return (
     <>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router";
-import { Pencil, Plus, Trash2, Eye, PanelLeft, X } from "lucide-react";
+import { Pencil, Plus, Trash2, Eye, PanelLeft, Star, FolderOpen, Info, X } from "lucide-react";
 import { useMenuStore } from "../features/menu/store";
 import { sendCommand } from "../services/ws";
 import { useToastStore } from "./toast";
@@ -9,6 +9,8 @@ import { promptOpen } from "./PromptDialog";
 import { useWheelScrollHorizontal } from "../hooks/useWheelScroll";
 import { useDetachStore } from "../features/floating/detachStore";
 import { useDetachDrag } from "../features/floating/useDetachDrag";
+import { detachToFloat, closeFloat } from "../features/floating/floatClient";
+import { useBrowserStore, type BrowserTab } from "../features/browser/store";
 
 /** 右键菜单目标：动态菜单栏 或 导航栏按钮 */
 export interface CtxTarget {
@@ -24,7 +26,9 @@ export interface CtxState {
 
 export interface CtxItem {
   label: string;
-  icon?: "pencil" | "plus" | "trash" | "eye" | "panel-left";
+  /** sep=true 时渲染为分隔线（label/icon 被忽略） */
+  sep?: boolean;
+  icon?: "pencil" | "plus" | "trash" | "eye" | "panel-left" | "star" | "folder" | "info";
   danger?: boolean;
   run: () => void | Promise<void>;
 }
@@ -36,26 +40,31 @@ export function CtxMenu({ state, items, onClose }: { state: CtxState; items: Ctx
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  const W = 158;
-  const H = items.length * 34 + 12;
+  const W = 176;
+  // 分隔线行高更矮（13px），普通项 34px——视口收拢计算按内容实际高度
+  const H = items.reduce((h, it) => h + (it.sep ? 13 : 34), 0) + 12;
   const left = Math.max(4, Math.min(state.x, window.innerWidth - W - 8));
   const top = Math.max(4, Math.min(state.y, window.innerHeight - H - 8));
   return (
     <>
       <div className="ctx-backdrop" onMouseDown={onClose} />
       <div className="ctx-menu" style={{ left, top }} onMouseDown={(e) => e.stopPropagation()}>
-        {items.map((it) => (
-          <button
-            key={it.label}
-            className={"ctx-menu__item" + (it.danger ? " danger" : "")}
-            onClick={() => {
-              void Promise.resolve(it.run()).finally(onClose);
-            }}
-          >
-            {it.icon === "pencil" ? <Pencil size={13} /> : it.icon === "plus" ? <Plus size={13} /> : it.icon === "trash" ? <Trash2 size={13} /> : it.icon === "eye" ? <Eye size={13} /> : it.icon === "panel-left" ? <PanelLeft size={13} /> : null}
-            {it.label}
-          </button>
-        ))}
+        {items.map((it, i) =>
+          it.sep ? (
+            <div key={`sep-${i}`} className="ctx-menu__sep" />
+          ) : (
+            <button
+              key={it.label}
+              className={"ctx-menu__item" + (it.danger ? " danger" : "")}
+              onClick={() => {
+                void Promise.resolve(it.run()).finally(onClose);
+              }}
+            >
+              {it.icon === "pencil" ? <Pencil size={13} /> : it.icon === "plus" ? <Plus size={13} /> : it.icon === "trash" ? <Trash2 size={13} /> : it.icon === "eye" ? <Eye size={13} /> : it.icon === "panel-left" ? <PanelLeft size={13} /> : it.icon === "star" ? <Star size={13} /> : it.icon === "folder" ? <FolderOpen size={13} /> : it.icon === "info" ? <Info size={13} /> : null}
+              {it.label}
+            </button>
+          )
+        )}
       </div>
     </>
   );
@@ -64,7 +73,7 @@ export function CtxMenu({ state, items, onClose }: { state: CtxState; items: Ctx
 /** 生成「重命名 + 添加菜单栏 + 删除」三项（菜单 / 导航共用；重命名走全局 PromptDialog，
  *  添加菜单栏 → 工具箱设置「菜单栏管理」页；错误走全局 toast，menu.changed 自动刷新列表；
  * 子窗口导航行也复用，navigate 传主路由 —— 仅当主视图正停在该导航时路由跟随改名） */
-export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigate: (p: string) => void }): CtxItem[] {
+export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigate: (p: string) => void; omitUnpin?: boolean }): CtxItem[] {
   // 非组件上下文：直接读 toast store（useToast 是 hook，不能在此调用）
   const toast = {
     ok: (t: string) => useToastStore.getState().push("ok", t),
@@ -92,8 +101,8 @@ export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigat
           } catch (e) { err(e); }
         },
       },
-      {
-        label: "移到左侧栏", icon: "panel-left",
+      ...(opts.omitUnpin ? [] : [{
+        label: "移到左侧栏", icon: "panel-left" as const,
         run: () => {
           // v2.2.0：顶栏「已上架」菜单移回左侧导航栏（顶栏只留首页 / 需要的菜单）。
           // 若正停在该菜单的工具画布 → 一并回首页（该菜单已离开顶栏工作区，
@@ -104,7 +113,7 @@ export function ctxItemsFor(target: CtxTarget, opts: { menuName: string; navigat
           if (wasActive) opts.navigate("/");
           toast.ok(`菜单栏「${m}」已移回左侧导航栏`);
         },
-      },
+      }]),
       {
         label: "添加菜单栏", icon: "plus",
         run: () => {
@@ -253,13 +262,19 @@ function DynamicMenuButton({ m, active, barRef, onClick, onInBarDrop, onCtx }: {
 }) {
   const { startDrag, suppressClick, ghost, hoverMe } = useDetachDrag({
     name: m.name,
+    key: m.name,
+    label: m.name,
     color: m.menu_color,
     reorderable: true,
     onInBarDrop,
     barRef: barRef ?? ({ current: null } as React.RefObject<HTMLElement | null>),
+    // v2.3.2：拖出顶栏 → 独立原生窗口（不可用时 floatClient 自动回退 HTML 浮层）
+    detach: (x, y) => {
+      const nav = m.navigation_bar_name[0] ?? "首页";
+      void detachToFloat({ key: m.name, label: m.name, kind: "menu", menu: m.name, nav, x, y });
+    },
   });
   const detached = useDetachStore((s) => m.name in s.detached);
-  const close = useDetachStore((s) => s.close);
   const navigate = useNavigate();
 
   /** ×：把该菜单从顶栏收回左侧栏（与右键「移到左侧栏」同语义） */
@@ -286,7 +301,7 @@ function DynamicMenuButton({ m, active, barRef, onClick, onInBarDrop, onCtx }: {
           onPointerDown={startDrag}
           onClick={(e) => {
             if (suppressClick()) { e.preventDefault(); return; }
-            if (detached) { e.preventDefault(); close(m.name); return; }
+            if (detached) { e.preventDefault(); closeFloat(m.name); return; }
             onClick(m);
           }}
           onContextMenu={(e) => {
@@ -334,14 +349,17 @@ export function NavBarRow() {
   const navigate = useNavigate();
   const loc = useLocation();
   const rowRef = useRef<HTMLDivElement>(null);
-  const dragFrom = useRef<number | null>(null);
-  const [dragTo, setDragTo] = useState<number | null>(null);
   const [ctx, setCtx] = useState<CtxState | null>(null);
 
   const menu = menus.find((m) => m.name === activeMenu);
   const enabled = !!(menu && menu.navigation_bar_name.length > 0);
-  useWheelScrollHorizontal(rowRef, enabled);
+  // 内置浏览器路由下，导航行改为「浏览器标签行」（不受当前激活菜单约束）。
+  // hook 必须无条件调用：先订阅标签列表，再统一决定滚动监听与渲染分支。
+  const isBrowserRoute = loc.pathname.startsWith("/browser");
+  const browserTabs = useBrowserStore((s) => s.tabs);
+  useWheelScrollHorizontal(rowRef, isBrowserRoute || enabled);
 
+  if (isBrowserRoute) return <BrowserTabsRow rowRef={rowRef} tabs={browserTabs} />;
   if (!enabled) return null;
 
   function go(nav: string) {
@@ -349,29 +367,19 @@ export function NavBarRow() {
     navigate(`/tools/${encodeURIComponent(menu!.name)}/${encodeURIComponent(nav)}`);
   }
 
-  function onDragStart(e: React.DragEvent, i: number) {
-    if (menu!.navigation_bar_name[i] === "首页") return; // 「首页」固定首位，自身不可拖
-    dragFrom.current = i;
-    e.dataTransfer.effectAllowed = "move";
-    try { e.dataTransfer.setData("text/plain", menu!.navigation_bar_name[i]); } catch { /* noop */ }
-  }
-
-  function onDragOver(e: React.DragEvent, i: number) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    if (i !== dragTo) setDragTo(i);
-  }
-
-  function onDrop(i: number) {
-    const from = dragFrom.current;
-    dragFrom.current = null;
-    setDragTo(null);
-    if (from === null || from === i) return;
+  /** 栏内拖放重排（v2.3.2：从 HTML5 DnD 改为与顶栏一致的 pointer 拖拽；
+   *  targetKey = `菜单::导航`，插缝算法与旧 onDrop 完全一致） */
+  function reorderNavs(moveNav: string, targetKey: string) {
+    const prefix = `${menu!.name}::`;
+    const targetNav = targetKey.startsWith(prefix) ? targetKey.slice(prefix.length) : targetKey;
     const bars = [...menu!.navigation_bar_name];
+    const from = bars.indexOf(moveNav);
+    const to = bars.indexOf(targetNav);
+    if (from < 0 || to < 0 || from === to) return;
     const [moved] = bars.splice(from, 1);
     // 「首页」固定首位：其它导航压到首页上松手 → 落到首页之后（下标钳制 ≥1）
-    if (bars[0] === "首页") i = Math.max(1, i);
-    bars.splice(i, 0, moved);
+    const insertAt = bars[0] === "首页" ? Math.max(1, to) : to;
+    bars.splice(insertAt, 0, moved);
     void useMenuStore.getState().reorderNavs(menu!.name, bars);
   }
 
@@ -380,28 +388,17 @@ export function NavBarRow() {
 
   return (
     <div className="nav-bar-row" ref={rowRef}>
-      {menu!.navigation_bar_name.map((n, i) => (
-        <button
+      {menu!.navigation_bar_name.map((n) => (
+        <NavButton
           key={n}
-          className={
-            "nav-bar-row__btn" +
-            (canvasNav === n ? " active" : "") +
-            (dragTo === i ? " drop-target" : "")
-          }
-          draggable={n !== "首页"}
-          onClick={() => go(n)}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            setCtx({ x: e.clientX, y: e.clientY, target: { kind: "nav", name: n } });
-          }}
-          onDragStart={(e) => onDragStart(e, i)}
-          onDragOver={(e) => onDragOver(e, i)}
-          onDrop={() => onDrop(i)}
-          onDragEnd={() => { dragFrom.current = null; setDragTo(null); }}
-          title={n === "首页" ? "点选打开；「首页」固定首位不可移动；右键 重命名/删除" : "点选或拖拽排序；右键 重命名/删除"}
-        >
-          {n}
-        </button>
+          menu={menu!.name}
+          nav={n}
+          active={canvasNav === n}
+          barRef={rowRef}
+          onGo={go}
+          onReorder={(targetKey) => reorderNavs(n, targetKey)}
+          onCtx={(x, y) => setCtx({ x, y, target: { kind: "nav", name: n } })}
+        />
       ))}
       {ctx ? (
         <CtxMenu
@@ -411,5 +408,219 @@ export function NavBarRow() {
         />
       ) : null}
     </div>
+  );
+}
+
+/** 导航栏按钮（v2.3.2）：pointer 拖拽统一处理「栏内重排 / 拖出脱离为原生子窗口」，
+ *  与顶栏菜单按钮共用 useDetachDrag；点击/右键行为保持不变。 */
+function NavButton({ menu, nav, active, barRef, onGo, onReorder, onCtx }: {
+  menu: string;
+  nav: string;
+  active: boolean;
+  barRef: React.RefObject<HTMLElement | null>;
+  onGo: (nav: string) => void;
+  onReorder: (targetKey: string) => void;
+  onCtx: (x: number, y: number) => void;
+}) {
+  const key = `${menu}::${nav}`;
+  const label = `${menu} · ${nav}`;
+  const detached = useDetachStore((s) => key in s.detached);
+  const { startDrag, suppressClick, ghost, hoverMe } = useDetachDrag({
+    name: nav,
+    key,
+    label,
+    barRef,
+    reorderable: true,
+    onInBarDrop: onReorder,
+    detach: (x, y) => {
+      void detachToFloat({ key, label, kind: "nav", menu, nav, x, y });
+    },
+  });
+
+  return (
+    <>
+      <button
+        className={
+          "nav-bar-row__btn" +
+          (active ? " active" : "") +
+          (detached ? " nav-bar-row__btn--detached" : "") +
+          (hoverMe ? " drop-target" : "")
+        }
+        data-detach-btn={key}
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onPointerDown={startDrag}
+        onClick={(e) => {
+          if (suppressClick()) { e.preventDefault(); return; }
+          if (detached) { e.preventDefault(); closeFloat(key); return; }
+          onGo(nav);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onCtx(e.clientX, e.clientY);
+        }}
+        title={
+          detached
+            ? `「${label}」已脱离为子窗口，点击收回导航栏`
+            : "点选打开；拖动排序；拖出导航栏脱离为子窗口；右键 重命名/删除"
+        }
+      >
+        {nav}
+        {detached ? <span className="nav-link__detached-tag">已脱离</span> : null}
+      </button>
+      {ghost}
+    </>
+  );
+}
+
+/** 解析 /browser/:menu/:name（react-router 路由参数已解码，这里按段再解一次以兼容直接拼接的路径） */
+function parseBrowserRoute(pathname: string): { menu: string; name: string } {
+  const seg = pathname.split("/");
+  if (seg[1] !== "browser") return { menu: "", name: "" };
+  return {
+    menu: decodeURIComponent(seg[2] ?? ""),
+    name: decodeURIComponent(seg[3] ?? ""),
+  };
+}
+
+/** 标签对应的路由（编码方式与 launch.ts / AppShell 顶栏入口保持一致） */
+function browserTabPath(tab: BrowserTab): string {
+  return `/browser/${encodeURIComponent(tab.menu)}/${encodeURIComponent(tab.name)}`;
+}
+
+/** 关闭最后一个标签返回工具画布时恢复激活菜单。
+ *  AppShell 在离开 /tools 路由时会 clearActive，仅靠 navigate 回去会出现
+ *  「画布还在、导航行却消失」；这里按来源路径把菜单重新上架并定位导航。 */
+function restoreToolCanvasState(path: string) {
+  const m = /^\/tools\/([^/]+)(?:\/([^/]+))?/.exec(path);
+  if (!m) return;
+  try {
+    const menuName = decodeURIComponent(m[1]);
+    const nav = m[2] ? decodeURIComponent(m[2]) : "首页";
+    const st = useMenuStore.getState();
+    if (!st.menus.some((x) => x.name === menuName)) return;
+    st.pinMenu(menuName);
+    st.openToolCanvas(menuName, nav);
+  } catch { /* 路径解码异常则不恢复，退回首页 */ }
+}
+
+/**
+ * 内置浏览器标签行（/browser/* 路由下替代普通导航行）：
+ *  - 每个已打开标签一个按钮，当前路由对应标签高亮（按 menu/name 比对，不依赖 store 顺序）；
+ *  - 悬停时右侧浮现 × 关闭；关闭后按 closeTab 返回的 nextId 跳转，
+ *    最后一个标签关闭则返回打开浏览器前的应用内路径（returnTo）。
+ *  - 标签列表由 NavBarRow 订阅后传入，避免同一状态重复订阅。
+ */
+function BrowserTabsRow({ rowRef, tabs }: {
+  rowRef: React.RefObject<HTMLDivElement | null>;
+  tabs: BrowserTab[];
+}) {
+  const navigate = useNavigate();
+  const loc = useLocation();
+  const route = parseBrowserRoute(loc.pathname);
+
+  function openTab(tab: BrowserTab) {
+    useBrowserStore.getState().setActive(tab.id);
+    navigate(browserTabPath(tab));
+  }
+
+  function closeTab(tab: BrowserTab) {
+    // 先记住关闭前是否激活：closeTab 会改写 activeId，关闭后再判断就晚了
+    const wasActive = tab.menu === route.menu && tab.name === route.name;
+    const st = useBrowserStore.getState();
+    const r = st.closeTab(tab.id);
+    if (r.remaining === 0) {
+      restoreToolCanvasState(st.returnTo);
+      navigate(st.returnTo || "/");
+      return;
+    }
+    if (!wasActive) return;
+    // closeTab 已把激活态切到 nextId（后一个优先，否则前一个）→ 路由跟过去
+    const next = useBrowserStore.getState().tabs.find((t) => t.id === r.nextId);
+    if (next) navigate(browserTabPath(next));
+  }
+
+  return (
+    <div className="nav-bar-row" ref={rowRef}>
+      <span className="nav-bar-row__label">浏览器</span>
+      {tabs.map((tab) => {
+        const active = tab.menu === route.menu && tab.name === route.name;
+        return (
+          <BrowserTabButton
+            key={tab.id}
+            tab={tab}
+            active={active}
+            barRef={rowRef}
+            onOpen={() => openTab(tab)}
+            onClose={() => closeTab(tab)}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/** 浏览器标签（v2.3.2）：点击切换；拖出标签栏 → 独立子窗口（窗口内嵌原生 WebView2 显示该网页）。 */
+function BrowserTabButton({ tab, active, barRef, onOpen, onClose }: {
+  tab: BrowserTab;
+  active: boolean;
+  barRef: React.RefObject<HTMLElement | null>;
+  onOpen: () => void;
+  onClose: () => void;
+}) {
+  const key = `browser::${tab.id}`;
+  const detached = useDetachStore((s) => key in s.detached);
+  const { startDrag, suppressClick, ghost, hoverMe } = useDetachDrag({
+    name: tab.name,
+    key,
+    label: tab.name,
+    barRef,
+    reorderable: false,
+    detach: (x, y) => {
+      void detachToFloat({
+        key,
+        label: tab.name,
+        kind: "browser",
+        menu: tab.menu,
+        nav: tab.name,
+        url: tab.url,
+        x,
+        y,
+      });
+    },
+  });
+
+  return (
+    <span
+      className={
+        "browser-tab" +
+        (active ? " is-active" : "") +
+        (detached ? " browser-tab--detached" : "")
+      }
+    >
+      <button
+        className={"nav-bar-row__btn" + (active ? " active" : "") + (hoverMe ? " drop-target" : "")}
+        data-detach-btn={key}
+        title={`${tab.url}\n拖动可脱离为子窗口`}
+        onPointerDown={startDrag}
+        onClick={(e) => {
+          if (suppressClick()) { e.preventDefault(); return; }
+          if (detached) { e.preventDefault(); closeFloat(key); return; }
+          onOpen();
+        }}
+      >
+        {tab.name}
+        {detached ? <span className="nav-link__detached-tag">已脱离</span> : null}
+      </button>
+      <button
+        className="browser-tab__close"
+        title="关闭标签"
+        aria-label={`关闭标签 ${tab.name}`}
+        onClick={onClose}
+      >
+        <X size={11} />
+      </button>
+      {ghost}
+    </span>
   );
 }

@@ -21,7 +21,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 8px 6px;
+  /* 固定行高 + border-box：与顶栏 .menu-bar 的 38px 首行等齐，垂直内边距归零，
+     避免内容撑高或收缩态切换时出现高度跳动 */
+  height: var(--top-row-h);
+  box-sizing: border-box;
+  padding: 0 8px;
   flex: 0 0 auto;
   border-bottom: 1px solid var(--border);
 }
@@ -42,8 +46,23 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* v2.2.6：收缩为图标条时的品牌标识「破」——与展开按钮同行，点击等同展开按钮 */
+.side-nav__brand-mark {
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 20px;
+  cursor: pointer;
+}
+.side-nav__brand-mark:hover { color: var(--accent); }
 .side-nav__head-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
-.side-nav[data-collapsed="1"] .side-nav__head { justify-content: center; padding: 8px 4px 6px; }
+/* 收缩态：左右 4px、gap 归零，让「破」字与展开按钮能塞进 52px 且不换行 */
+.side-nav[data-collapsed="1"] .side-nav__head { justify-content: center; padding: 0 4px; gap: 0; }
 .side-nav__icon-btn {
   display: inline-flex;
   align-items: center;

@@ -27,6 +27,7 @@
   --out-fg: #202124;
 
   /* 结构 */
+  --top-row-h: 38px;      /* 顶栏首行 / 左侧侧栏头部统一高度：两者上下边界严格对齐，收缩态不跳动 */
   --scroll: #cfd8dc;
   --heading-bg: #e8eaed;
   --heading-active: #dde2e8;

@@ -14,6 +14,7 @@ def test_app_env_service_mode_not_windowed():
     env = bmain.get_app_env()
     assert env["windowed"] is False
     assert env["frameless"] is False
+    assert env["float_window"] is False  # v2.3.2：非窗口形态不提供原生浮动窗口
     assert env["platform"] == sys.platform
 
 
@@ -21,7 +22,10 @@ def test_app_env_windowed_flag(monkeypatch):
     """run_windowed 置位后 app.env 反映 windowed=True。"""
     monkeypatch.setattr(bmain, "_WINDOWED_UI", True)
     try:
-        assert bmain.get_app_env()["windowed"] is True
+        env = bmain.get_app_env()
+        assert env["windowed"] is True
+        # v2.3.2：仅 Windows 窗口模式具备原生浮动子窗口能力
+        assert env["float_window"] is (sys.platform == "win32")
     finally:
         bmain._WINDOWED_UI = False
 
@@ -31,7 +35,7 @@ def test_app_env_includes_version():
     from bridge.update_service import APP_VERSION
     env = bmain.get_app_env()
     assert env["version"] == APP_VERSION
-    assert APP_VERSION == "2.2.4"  # 锚定单一来源常量值（随当前发行版本更新）
+    assert APP_VERSION == "2.3.4"  # 锚定单一来源常量值（随当前发行版本更新）
 
 
 def test_window_rect_no_window_returns_none():

@@ -15,11 +15,19 @@ export interface MenuInfo {
 /** 固定菜单栏（首页/AI 对话/…）显隐表：{名称: 1|0}，缺省视为 1 */
 export type FixedVisible = Record<string, number>;
 
+/** 工具元数据（menu.list_tools 展平结果）：导航、名称、启动方式、工具路径（链接类即 URL） */
+export interface ToolMeta {
+  nav: string;
+  name: string;
+  runType: string;
+  path: string;
+}
+
 /** 工具画布页选中态：当前菜单 + 导航（导航空则默认首页） */
 interface MenuStore {
   menus: MenuInfo[];
   /** 菜单 → 工具列表（menu.list_tools 顺序：导航序 × 工具序；工具快捷键默认编号的依据） */
-  tools: Record<string, { nav: string; name: string }[]>;
+  tools: Record<string, ToolMeta[]>;
   fixedVisible: FixedVisible;
   loading: boolean;
   loaded: boolean;
@@ -87,10 +95,17 @@ export const useMenuStore = create<MenuStore>((set, get) => ({
       const toolMaps = await Promise.all(menus.map(async (m) => {
         try {
           const r2 = await sendCommand("menu.list_tools", { menu: m.name });
-          const list = (r2.tools ?? []) as { nav?: string; 工具名称: string }[];
-          return [m.name, list.map((t) => ({ nav: String(t.nav ?? "首页"), name: t.工具名称 }))] as const;
+          const list = (r2.tools ?? []) as {
+            nav?: string; 工具名称: string; 启动方式?: string; 工具路径?: string;
+          }[];
+          return [m.name, list.map((t) => ({
+            nav: String(t.nav ?? "首页"),
+            name: String(t.工具名称),
+            runType: String(t.启动方式 ?? ""),
+            path: String(t.工具路径 ?? ""),
+          }))] as const;
         } catch {
-          return [m.name, [] as { nav: string; name: string }[]] as const;
+          return [m.name, [] as ToolMeta[]] as const;
         }
       }));
       set({ tools: Object.fromEntries(toolMaps) });

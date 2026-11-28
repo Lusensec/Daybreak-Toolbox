@@ -218,6 +218,84 @@ class MenuServiceTest(unittest.TestCase):
         ms.update_tool_path("Windows红队工具箱", "t1", "t1/t1.zip")
         self.assertEqual(ms.list_tools("Windows红队工具箱")[0]["工具路径"], "t1/t1.zip")
 
+    # ---- v2.2.5：工具右键编辑 / 栏内排序 / 首页固定 ----
+    def test_update_tool_rename(self):
+        ms.add_tool("t1", "t1.exe", "Windows红队工具箱", "首页", "直接打开")
+        r = ms.update_tool("Windows红队工具箱", "t1", new_name="t2")
+        self.assertEqual(r["name"], "t2")
+        self.assertEqual([t["工具名称"] for t in ms.list_tools("Windows红队工具箱")], ["t2"])
+
+    def test_update_tool_partial_fields(self):
+        # 只传 run_type：其余字段保持原值
+        ms.add_tool("t1", "t1.exe", "Windows红队工具箱", "首页", "直接打开")
+        ms.update_tool("Windows红队工具箱", "t1", run_type="命令行打开", command="t1.exe *")
+        t = ms.list_tools("Windows红队工具箱")[0]
+        self.assertEqual(t["启动方式"], "命令行打开")
+        self.assertEqual(t["工具命令"], "t1.exe *")
+        self.assertEqual(t["工具路径"], "t1.exe")
+
+    def test_update_tool_rename_duplicate(self):
+        ms.add_tool("t1", "a.exe", "Windows红队工具箱", "首页", "直接打开")
+        ms.add_tool("t2", "b.exe", "Windows红队工具箱", "首页", "直接打开")
+        with self.assertRaises(ms.MenuError) as cm:
+            ms.update_tool("Windows红队工具箱", "t1", new_name="t2")
+        self.assertEqual(cm.exception.code, "TOOL_NAME_EXISTS")
+
+    def test_update_tool_cmdline_needs_star(self):
+        ms.add_tool("t1", "t1.exe", "Windows红队工具箱", "首页", "直接打开")
+        with self.assertRaises(ms.MenuError) as cm:
+            ms.update_tool("Windows红队工具箱", "t1", run_type="命令行打开", command="t1.exe")
+        self.assertEqual(cm.exception.code, "INTERNAL")
+
+    def test_update_tool_link_needs_http(self):
+        ms.add_tool("t1", "t1.exe", "Windows红队工具箱", "首页", "直接打开")
+        with self.assertRaises(ms.MenuError) as cm:
+            ms.update_tool("Windows红队工具箱", "t1", run_type="链接打开")
+        self.assertEqual(cm.exception.code, "INTERNAL")
+
+    def test_update_tool_missing(self):
+        with self.assertRaises(ms.MenuError) as cm:
+            ms.update_tool("Windows红队工具箱", "幽灵", new_name="x")
+        self.assertEqual(cm.exception.code, "TOOL_NOT_FOUND")
+
+    def test_reorder_tools(self):
+        ms.add_tool("a", "a.exe", "Windows红队工具箱", "首页", "直接打开")
+        ms.add_tool("b", "b.exe", "Windows红队工具箱", "首页", "直接打开")
+        ms.add_tool("c", "c.exe", "Windows红队工具箱", "首页", "直接打开")
+        r = ms.reorder_tools("Windows红队工具箱", "首页", ["c", "a", "b"])
+        self.assertEqual(r["order"], ["c", "a", "b"])
+        self.assertEqual([t["工具名称"] for t in ms.list_tools("Windows红队工具箱")],
+                         ["c", "a", "b"])
+
+    def test_reorder_tools_rejects_wrong_set(self):
+        ms.add_tool("a", "a.exe", "Windows红队工具箱", "首页", "直接打开")
+        with self.assertRaises(ms.MenuError) as cm:
+            ms.reorder_tools("Windows红队工具箱", "首页", ["a", "b"])
+        self.assertEqual(cm.exception.code, "INTERNAL")
+
+    def test_home_pin_add_remove_list(self):
+        ms.add_tool("t1", "t1.exe", "Windows红队工具箱", "首页", "直接打开")
+        ms.home_tool_add("Windows红队工具箱", "t1")
+        # 幂等：重复加入只留一条
+        ms.home_tool_add("Windows红队工具箱", "t1")
+        pins = ms.home_tools()
+        self.assertEqual(len(pins), 1)
+        self.assertEqual(pins[0], {"menu": "Windows红队工具箱", "name": "t1"})
+        ms.home_tool_remove("Windows红队工具箱", "t1")
+        self.assertEqual(ms.home_tools(), [])
+
+    def test_home_pin_missing_tool_rejected(self):
+        with self.assertRaises(ms.MenuError) as cm:
+            ms.home_tool_add("Windows红队工具箱", "幽灵")
+        self.assertEqual(cm.exception.code, "TOOL_NOT_FOUND")
+
+    def test_home_pin_prunes_deleted_tool(self):
+        ms.add_tool("t1", "t1.exe", "Windows红队工具箱", "首页", "直接打开")
+        ms.home_tool_add("Windows红队工具箱", "t1")
+        ms.delete_tool("Windows红队工具箱", "t1")
+        # 读取时自动剪枝幽灵 pin 并回写
+        self.assertEqual(ms.home_tools(), [])
+
     # ---- 显隐（菜单栏展示：1 显示 / 0 隐藏）----
     def test_set_visible(self):
         ms.set_visible("Windows红队工具箱", False)

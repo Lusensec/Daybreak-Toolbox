@@ -30,9 +30,11 @@ from .menu_service import (list_menus, add_menu, delete_menu, rename_menu, renam
                           reorder_menus, reorder_navs,
                           set_visible, set_fixed_visible, list_fixed_visible,
                           add_tool, delete_tool, list_tools, changed_snapshot,
+                          update_tool, reorder_tools, home_tool_add, home_tool_remove,
                           MenuError)
 from .dialog_service import pick_file, pick_folder, DialogError
-from .execute_service import run_tool, tool_grid, ToolError
+from .execute_service import (run_tool, tool_grid, open_tool_folder,
+                              home_tools_detailed, ToolError)
 from .update_service import (
     APP_VERSION,
     UpdateError,
@@ -209,6 +211,51 @@ def _register_builtin_commands() -> None:
     _bus.register("menu.list_tools", _menu_list_tools)
     _bus.register("menu.reorder", _menu_reorder)
     _bus.register("menu.reorder_nav", _menu_reorder_nav)
+
+    # ---- v2.2.5：工具右键（编辑/排序/打开所在文件夹）+ 首页固定 ----
+    async def _tool_update(p, _ws) -> dict:
+        # 只改传入的字段；改名/改启动方式走与 add_tool 相同的校验
+        r = await asyncio.to_thread(_menu_call, update_tool, str(p.get("menu", "")),
+                                    str(p.get("name", "")),
+                                    new_name=str(p["new_name"]) if p.get("new_name") else None,
+                                    new_path=str(p["new_path"]) if p.get("new_path") else None,
+                                    run_type=str(p["run_type"]) if p.get("run_type") else None,
+                                    command=str(p["command"]) if p.get("command") is not None else None)
+        await _bus.broadcast("menu.changed", changed_snapshot())
+        return r
+
+    async def _tool_reorder(p, _ws) -> dict:
+        order = [str(x) for x in (p.get("order") or [])]
+        r = await asyncio.to_thread(_menu_call, reorder_tools,
+                                    str(p.get("menu", "")), str(p.get("nav", "")), order)
+        await _bus.broadcast("menu.changed", changed_snapshot())
+        return r
+
+    async def _tool_open_folder(p, _ws) -> dict:
+        return await asyncio.to_thread(_tool_call, open_tool_folder,
+                                       str(p.get("menu", "")), str(p.get("name", "")))
+
+    async def _home_get(_p, _ws) -> dict:
+        return {"tools": await asyncio.to_thread(_tool_call, home_tools_detailed)}
+
+    async def _home_add(p, _ws) -> dict:
+        r = await asyncio.to_thread(_menu_call, home_tool_add,
+                                    str(p.get("menu", "")), str(p.get("name", "")))
+        await _bus.broadcast("menu.changed", changed_snapshot())
+        return r
+
+    async def _home_remove(p, _ws) -> dict:
+        r = await asyncio.to_thread(_menu_call, home_tool_remove,
+                                    str(p.get("menu", "")), str(p.get("name", "")))
+        await _bus.broadcast("menu.changed", changed_snapshot())
+        return r
+
+    _bus.register("tool.update", _tool_update)
+    _bus.register("tool.reorder", _tool_reorder)
+    _bus.register("tool.open_folder", _tool_open_folder)
+    _bus.register("home.tools.get", _home_get)
+    _bus.register("home.tools.add", _home_add)
+    _bus.register("home.tools.remove", _home_remove)
 
     # ---- 原生文件/文件夹选择对话框（Web 端「浏览路径」按钮）----
     # 模态对话框阻塞线程 → to_thread 跑，不卡事件循环；取消返回 {"path": ""}
@@ -399,6 +446,162 @@ def _register_builtin_commands() -> None:
     _bus.register("window.drag_begin", _window_drag_begin)
     _bus.register("window.drag_end", _window_drag_end)
 
+    # ---- 原生内嵌浏览器（v2.3.0，仅 Windows 窗口模式）----
+    # 目标网页作为原生 WebView2 的顶层文档加载，绕过 X-Frame-Options / CSP 的内嵌限制。
+    # 不可用时抛 BridgeError，前端 BrowserPage 自动回退 iframe。
+    def _nb():
+        from . import native_browser
+
+        return native_browser
+
+    async def _browser_attach(p, _ws):
+        nb = _nb()
+        try:
+            return await asyncio.to_thread(
+                nb.attach,
+                str(p.get("tab_id", "")),
+                str(p.get("url", "")),
+                p.get("rect") or {},
+                bool(p.get("show", True)),
+            )
+        except nb.NativeBrowserError as e:
+            raise BridgeError(e.code, e.message)
+
+    async def _browser_set_rect(p, _ws):
+        nb = _nb()
+        try:
+            return await asyncio.to_thread(nb.set_rect, p.get("rect") or {})
+        except nb.NativeBrowserError as e:
+            raise BridgeError(e.code, e.message)
+
+    async def _browser_activate(p, _ws):
+        nb = _nb()
+        try:
+            return await asyncio.to_thread(nb.activate, str(p.get("tab_id", "")))
+        except nb.NativeBrowserError as e:
+            raise BridgeError(e.code, e.message)
+
+    async def _browser_hide(_p, _ws):
+        nb = _nb()
+        try:
+            return await asyncio.to_thread(nb.hide)
+        except nb.NativeBrowserError as e:
+            raise BridgeError(e.code, e.message)
+
+    async def _browser_reload(p, _ws):
+        nb = _nb()
+        try:
+            return await asyncio.to_thread(nb.reload, str(p.get("tab_id", "")))
+        except nb.NativeBrowserError as e:
+            raise BridgeError(e.code, e.message)
+
+    async def _browser_navigate(p, _ws):
+        nb = _nb()
+        try:
+            return await asyncio.to_thread(
+                nb.navigate, str(p.get("tab_id", "")), str(p.get("url", ""))
+            )
+        except nb.NativeBrowserError as e:
+            raise BridgeError(e.code, e.message)
+
+    async def _browser_close(p, _ws):
+        nb = _nb()
+        try:
+            return await asyncio.to_thread(nb.close, str(p.get("tab_id", "")))
+        except nb.NativeBrowserError as e:
+            raise BridgeError(e.code, e.message)
+
+    _bus.register("browser.attach", _browser_attach)
+    _bus.register("browser.set_rect", _browser_set_rect)
+    _bus.register("browser.activate", _browser_activate)
+    _bus.register("browser.hide", _browser_hide)
+    _bus.register("browser.reload", _browser_reload)
+    _bus.register("browser.navigate", _browser_navigate)
+    _bus.register("browser.close", _browser_close)
+
+    # ---- 原生浮动子窗口（v2.3.2，仅 Windows 窗口模式）----
+    # 菜单/导航拖出顶栏后创建真正的顶层 OS 窗口（不再是被主窗口 WebView2 盖住的 HTML 浮层）。
+    from . import float_service as _fs
+
+    _fs.configure(lambda: _current_port, _bus.emit, lambda: _WINDOWED_UI)
+
+    def _float_call(fn, *a, **kw):
+        try:
+            return fn(*a, **kw)
+        except _fs.FloatError as e:
+            raise BridgeError(e.code, e.message)
+
+    async def _float_create(p, _ws):
+        return await asyncio.to_thread(
+            _float_call, _fs.create,
+            str(p.get("key", "")), str(p.get("label", "")), str(p.get("kind", "menu")),
+            str(p.get("menu", "")), str(p.get("nav", "首页")),
+            p.get("x"), p.get("y"), p.get("width", 760), p.get("height", 480),
+            str(p.get("url", "")),
+        )
+
+    async def _float_close(p, _ws):
+        return await asyncio.to_thread(_float_call, _fs.close, str(p.get("key", "")))
+
+    async def _float_close_all(_p, _ws):
+        return await asyncio.to_thread(_fs.close_all)
+
+    async def _float_focus(p, _ws):
+        return await asyncio.to_thread(_float_call, _fs.focus, str(p.get("key", "")))
+
+    async def _float_move(p, _ws):
+        return await asyncio.to_thread(
+            _float_call, _fs.move, str(p.get("key", "")), p.get("x", 0), p.get("y", 0)
+        )
+
+    async def _float_maximize(p, _ws):
+        return await asyncio.to_thread(_float_call, _fs.maximize, str(p.get("key", "")))
+
+    async def _float_drag_begin(p, _ws):
+        return await asyncio.to_thread(
+            _float_call, _fs.drag_begin, str(p.get("key", "")),
+            p.get("sx", 0), p.get("sy", 0), p.get("ratio", 0.5), p.get("title_h", 0),
+        )
+
+    async def _float_resize(p, _ws):
+        return await asyncio.to_thread(
+            _float_call, _fs.resize, str(p.get("key", "")),
+            p.get("width", 760), p.get("height", 480),
+        )
+
+    async def _float_list(_p, _ws):
+        return await asyncio.to_thread(_fs.list_keys)
+
+    # 浮动子窗口内嵌浏览器（拖出的浏览器标签）：父窗体是该浮窗，不影响主窗口标签
+    async def _browser_attach_float(p, _ws):
+        return await asyncio.to_thread(
+            _float_call, _fs.browser_attach,
+            str(p.get("key", "")), str(p.get("url", "")), p.get("rect") or {},
+        )
+
+    async def _browser_set_float_rect(p, _ws):
+        return await asyncio.to_thread(
+            _float_call, _fs.browser_set_rect, str(p.get("key", "")), p.get("rect") or {},
+        )
+
+    async def _browser_hide_float(p, _ws):
+        return await asyncio.to_thread(
+            _float_call, _fs.browser_hide, str(p.get("key", "")),
+        )
+
+    _bus.register("float.create", _float_create)
+    _bus.register("float.close", _float_close)
+    _bus.register("float.close_all", _float_close_all)
+    _bus.register("float.focus", _float_focus)
+    _bus.register("float.move", _float_move)
+    _bus.register("float.maximize", _float_maximize)
+    _bus.register("float.drag_begin", _float_drag_begin)
+    _bus.register("float.resize", _float_resize)
+    _bus.register("float.list", _float_list)
+    _bus.register("browser.attach_float", _browser_attach_float)
+    _bus.register("browser.set_float_rect", _browser_set_float_rect)
+    _bus.register("browser.hide_float", _browser_hide_float)
+
 
 def _bridge_dist() -> Optional[Path]:
     """web/dist 位置：打包态优先 _MEIPASS/dist（PyInstaller add-data），开发态项目根/web/dist。"""
@@ -459,6 +662,8 @@ def get_app_env() -> dict:
     v2.0.18：新增 version（单一来源 update_service.APP_VERSION；web 品牌区展示，取不到不渲染）。
     v2.2.3：新增 maximized（几何驱动）——页面重载后顶栏图标/拖拽还原仍与真实窗口状态一致。"""
     return {"windowed": _WINDOWED_UI, "frameless": _WINDOWED_UI, "platform": sys.platform,
+            "native_browser": bool(_WINDOWED_UI and sys.platform == "win32"),
+            "float_window": bool(_WINDOWED_UI and sys.platform == "win32"),
             "version": APP_VERSION,
             "maximized": bool(_WINDOWED_UI and sys.platform == "win32" and _is_window_maximized())}
 
@@ -1193,6 +1398,12 @@ def _install_closing_hook() -> None:
                 if msg == WM_CLOSE or (msg == WM_SYSCOMMAND and (wparam & 0xFFF0) == SC_CLOSE):
                     from . import settings_service
                     if settings_service.get_all().get("close_to_tray") and _active_window() is not None:
+                        # v2.3.4：独立浮窗不属于主窗体，驻留托盘时要一并收起，避免“已关闭”仍留在桌面
+                        try:
+                            from . import float_service as _float_svc
+                            _float_svc.close_all()
+                        except Exception as _e:
+                            print(f"[bridge] 关闭浮窗失败（忽略）：{_e}")
                         _active_window().minimize()
                         print("[bridge] 系统关窗拦截（Alt+F4/任务栏X）：关闭后进入最小化已开启 → 驻留托盘")
                         return 0
@@ -1409,6 +1620,12 @@ def quit_app() -> dict:
         close_to_tray = False
     if resolve_close_action(close_to_tray, w is not None) == "minimize":
         try:
+            # v2.3.4：驻留托盘前收起独立浮窗（它们不随主窗体最小化）
+            try:
+                from . import float_service as _float_svc
+                _float_svc.close_all()
+            except Exception as _e:
+                print(f"[bridge] 关闭浮窗失败（忽略）：{_e}")
             w.minimize()
             print("[bridge] 关闭→最小化（驻留托盘；托盘菜单可重新打开）")
             return {"ok": True, "minimized": True, "quit": False}

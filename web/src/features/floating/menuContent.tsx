@@ -35,6 +35,11 @@ export function menuDotColor(name: string): string {
 export function renderMenuContent(name: string): React.ReactNode {
   const C = FIXED_CONTENT[name];
   if (C) return <Suspense fallback={<ContentLoader />}><C /></Suspense>;
+  // 降级浮层（非原生窗口）里的导航条目 key 形如「菜单::导航」→ 定位到该导航
+  const sep = name.indexOf("::");
+  if (sep > 0) {
+    return <FloatingMenuCanvas menu={name.slice(0, sep)} initialNav={name.slice(sep + 2)} />;
+  }
   return <FloatingMenuCanvas menu={name} />;
 }
 
@@ -54,11 +59,19 @@ interface ToolItem {
  * 导航行与主视图 NavBarRow **同款**：.nav-bar-row 单行按钮（原顺序、可拖拽重排 menu.reorder_nav、
  * 右键重命名/删除、滚轮横滚）；仅点击切换的是本浮层自己的 nav 状态，不跳主路由。
  */
-export function FloatingMenuCanvas({ menu }: { menu: string }) {
+export function FloatingMenuCanvas({ menu, initialNav, showNav = true }: {
+  menu: string;
+  initialNav?: string;
+  /** v2.3.2：导航栏拖出的子窗口只需要工具内容，隐藏内部导航行 */
+  showNav?: boolean;
+}) {
   const menus = useMenuStore((s) => s.menus);
   const info = menus.find((m) => m.name === menu);
   const navs: string[] = info?.navigation_bar_name ?? [];
-  const [nav, setNav] = useState(navs[0] ?? "首页");
+  // v2.3.2：导航栏拖出的子窗口直接定位到该导航（校验属于当前菜单，否则回退首个）
+  const [nav, setNav] = useState(() =>
+    initialNav && navs.includes(initialNav) ? initialNav : navs[0] ?? "首页",
+  );
   const [tools, setTools] = useState<ToolItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -69,10 +82,21 @@ export function FloatingMenuCanvas({ menu }: { menu: string }) {
   const dragFrom = useRef<number | null>(null);
   const [dragTo, setDragTo] = useState<number | null>(null);
   const [ctx, setCtx] = useState<CtxState | null>(null);
-  useWheelScrollHorizontal(rowRef, navs.length > 0);
+  useWheelScrollHorizontal(rowRef, showNav && navs.length > 0);
 
   // nav 跟随菜单数据（menu.changed 刷新后若当前 nav 被删 → 回退首个）
+  // v2.3.2：新窗口首次打开时菜单数据尚未加载（navs=[]），数据到位后补一次 initialNav，
+  // 否则导航拖出的子窗口会停在默认首个导航而不是被拖出的那个。
+  const initialApplied = useRef(!initialNav);
   useEffect(() => {
+    if (!initialApplied.current) {
+      if (!navs.length) return; // 菜单数据未到位，等下一轮
+      initialApplied.current = true;
+      if (initialNav && navs.includes(initialNav)) {
+        if (nav !== initialNav) setNav(initialNav);
+        return;
+      }
+    }
     if (navs.length && !navs.includes(nav)) setNav(navs[0] ?? "首页");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menu, navs.join("|")]);
@@ -105,7 +129,7 @@ export function FloatingMenuCanvas({ menu }: { menu: string }) {
   return (
     <div className="tool-canvas float-canvas">
       {/* 导航行：与主视图 NavBarRow 完全同款（单行按钮、原顺序、拖拽重排、右键菜单） */}
-      {navs.length > 0 ? (
+      {showNav && navs.length > 0 ? (
         <div className="nav-bar-row float-canvas__row" ref={rowRef}>
           {navs.map((n, i) => (
             <button

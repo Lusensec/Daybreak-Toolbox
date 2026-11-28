@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import { createPortal } from "react-dom";
 import {
   ChevronsDownUp, ChevronsUpDown, Folder, FolderOpen,
   PanelLeftClose, PanelLeftOpen, Pin, Plus, Wrench,
@@ -7,6 +8,7 @@ import {
 import { useMenuStore } from "../features/menu/store";
 import type { MenuInfo } from "../features/menu/store";
 import { useSettingsModal } from "../store/settingsModal";
+import { CtxMenu, ctxItemsFor, type CtxState, type CtxTarget } from "./DynamicMenuNav";
 import "./SideNav.css";
 
 /** v2.2.0 左侧导航栏（文件夹式）：
@@ -58,6 +60,14 @@ export function SideNav() {
   // v2.2.1：侧栏宽度（拖右边缘拉伸）
   const [width, setWidth] = useState(loadWidth);
   const resizingRef = useRef(false);
+  // 右键菜单：菜单项/导航项复用顶栏同一套动作；menuName 记录导航所属菜单
+  const [ctx, setCtx] = useState<{ state: CtxState; menuName: string } | null>(null);
+
+  function openCtx(e: React.MouseEvent, target: CtxTarget, menuName: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtx({ state: { x: e.clientX, y: e.clientY, target }, menuName });
+  }
 
   const visible = useMemo(() => menus.filter((m) => (m.menu_visible ?? 1) !== 0), [menus]);
 
@@ -132,7 +142,16 @@ export function SideNav() {
       style={collapsed ? undefined : { width: `${width}px` }}
     >
       <div className="side-nav__head">
-        {collapsed ? null : (
+        {collapsed ? (
+          /* v2.2.6：收缩态保留「破」字作品牌标识；点击等同于展开按钮 */
+          <button
+            className="side-nav__brand-mark"
+            title="展开导航栏"
+            onClick={() => setCollapsed(false)}
+          >
+            破
+          </button>
+        ) : (
           <span className="side-nav__title" title="破晓·工具箱">
             <span className="side-nav__brand">破晓·工具箱</span>
           </span>
@@ -189,6 +208,7 @@ export function SideNav() {
                         : `${m.name}\n点击：${isOpen ? "收缩" : "展开"}导航${isOpen ? "" : "并上架到顶栏"}\n导航：${m.navigation_bar_name.join(" / ") || "无"}`
                     }
                     onClick={() => onMenuClick(m)}
+                    onContextMenu={(e) => openCtx(e, { kind: "menu", name: m.name }, m.name)}
                   >
                     {isOpen && !collapsed ? <FolderOpen size={14} className="side-nav__folder" /> : <Folder size={14} className="side-nav__folder" />}
                     <span className="side-nav__dot" style={{ background: m.menu_color || "#2980b9" }} />
@@ -216,6 +236,7 @@ export function SideNav() {
                           className={"side-nav__nav" + (isActive && activeNav === n ? " is-active" : "")}
                           title={`打开「${m.name} / ${n}」`}
                           onClick={() => openMenu(m, n)}
+                          onContextMenu={(e) => openCtx(e, { kind: "nav", name: n }, m.name)}
                         >
                           <span className="side-nav__nav-bar" />
                           {n}
@@ -249,6 +270,22 @@ export function SideNav() {
           onMouseDown={startResize}
         />
       )}
+
+      {/* 右键菜单通过 portal 挂到 body：避免被侧栏 overflow / 层叠上下文裁剪 */}
+      {ctx
+        ? createPortal(
+            <CtxMenu
+              state={ctx.state}
+              items={ctxItemsFor(ctx.state.target, {
+                menuName: ctx.menuName,
+                navigate,
+                omitUnpin: ctx.state.target.kind === "menu",
+              })}
+              onClose={() => setCtx(null)}
+            />,
+            document.body,
+          )
+        : null}
     </aside>
   );
 }

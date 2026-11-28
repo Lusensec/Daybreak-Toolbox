@@ -154,3 +154,86 @@
   outline: 2px dashed var(--accent);
   outline-offset: 2px;
 }
+
+/* ===== v2.3.2：原生浮动子窗口页面（FloatShell，独立 OS 窗口内整页铺满）===== */
+.float-shell {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+.float-shell__head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel, rgba(255, 255, 255, 0.02));
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+  flex: 0 0 auto;
+}
+.float-shell__body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 10px 14px;
+}
+/* 浏览器内容需要铺满（原生控件按占位矩形覆盖） */
+.float-shell__body--plain {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+/* 浮动子窗口内的浏览器：占位 div 由原生 WebView2 覆盖；占满标题栏以外的全部区域 */
+.float-shell__browser {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  color: #666;
+}
+.float-shell__browser-hint {
+  font-size: 13px;
+  color: #8a8f98;
+}
+.float-shell__frame {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+  display: block;
+}
+/* 右下角拉伸把手（热区略大，视觉低调） */
+.float-shell__grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(
+    135deg,
+    transparent 0 45%,
+    var(--border) 45% 55%,
+    transparent 55% 70%,
+    var(--border) 70% 80%,
+    transparent 80%
+  );
+}
+/* 导航栏按钮/浏览器标签「已脱离」态（虚线轮廓 + 降透明度，与顶栏菜单按钮同视觉） */
+.nav-bar-row__btn--detached,
+.browser-tab--detached .nav-bar-row__btn {
+  opacity: 0.55;
+  outline: 1px dashed var(--accent);
+  outline-offset: 1px;
+}

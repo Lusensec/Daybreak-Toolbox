@@ -3,14 +3,15 @@ import { createPortal } from "react-dom";
 import { useDetachStore, clampFloatPos, FLOAT_W, FLOAT_H } from "./detachStore";
 
 /**
- * 菜单按钮「栏内重排 / 拖出脱离为子窗口」统一拖拽 hook（pointer 事件，鼠标+触摸）。
+ * 菜单/导航按钮「栏内重排 / 拖出脱离为子窗口」统一拖拽 hook（pointer 事件，鼠标+触摸）。
  *
- * 手势（每个菜单按钮挂一个实例）：
+ * 手势（每个按钮挂一个实例）：
  *  - 按住移动 ≥4px 才进入拖拽（更短的移动视为普通点击）
- *  - 拖拽中：ghost 跟手；指针悬停其它菜单按钮 → 该按钮高亮「插入位」（共享 hoverTarget）
- *  - 指针**离开顶栏**（外扩 10px 包围盒之外）→ ghost 变虚线「松开脱离为子窗口」
- *  - 松手：脱离区 → 在松手处开子窗口（钳制视口内）；栏内且 reorderable →
- *         onInBarDrop(目标菜单名)（调用方把名字换算成下标，沿用旧 drop 的插缝算法）；
+ *  - 拖拽中：ghost 跟手；指针悬停其它按钮 → 该按钮高亮「插入位」（共享 hoverTarget）
+ *  - 指针**离开所在栏**（外扩 10px 包围盒之外）→ ghost 变虚线「松开脱离为子窗口」
+ *  - 松手：脱离区 → 优先调用 `detach(x, y)`（v2.3.2：建原生 OS 窗口）；
+ *         未提供 detach 时退回旧的 HTML 浮层（store.open）；
+ *         栏内且 reorderable → onInBarDrop(目标 key)；
  *         其余 → 无操作（固定菜单栏内松手=不重排）
  *
  * 关键实现：**pointerdown 立即 setPointerCapture** + move/up 监听挂 **window**。
@@ -23,20 +24,29 @@ import { useDetachStore, clampFloatPos, FLOAT_W, FLOAT_H } from "./detachStore";
  *  - ghost  渲染在按钮组件内（portal 到 body）
  */
 export function useDetachDrag(opts: {
+  /** 显示名（ghost 文案） */
   name: string;
+  /** 唯一标识（默认=name）：菜单=菜单名；导航=`菜单::导航` */
+  key?: string;
+  /** ghost 文案（默认=name） */
+  label?: string;
   color?: string;
-  /** 顶栏容器（判定「栏内/栏外」的参照 rect） */
+  /** 所在栏容器（判定「栏内/栏外」的参照 rect） */
   barRef: React.RefObject<HTMLElement | null>;
   reorderable?: boolean;
-  onInBarDrop?: (targetName: string) => void;
+  onInBarDrop?: (targetKey: string) => void;
+  /** 拖出栏外松手：由调用方创建原生浮动窗口（不传则退回 HTML 浮层） */
+  detach?: (x: number, y: number) => void;
 }) {
   const [drag, setDrag] = useState<null | { x: number; y: number; detach: boolean }>(null);
   const dragged = useRef(false);
-  const { name, color, barRef, reorderable, onInBarDrop } = opts;
+  const { name, key, label, color, barRef, reorderable, onInBarDrop, detach } = opts;
+  const identity = key ?? name;
+  const display = label ?? name;
   const store = useDetachStore;
-  /** 自己是否正被悬停（= 拖别的菜单时的「插入位」高亮目标） */
+  /** 自己是否正被悬停（= 拖别的按钮时的「插入位」高亮目标） */
   const hoverTarget = store((s) => s.hoverTarget);
-  const hoverMe = hoverTarget === name;
+  const hoverMe = hoverTarget === identity;
 
   const startDrag = useCallback(
     (e: React.PointerEvent<HTMLElement>) => {
@@ -64,12 +74,14 @@ export function useDetachDrag(opts: {
           dragged.current = true;
         }
         ev.preventDefault();
-        // 悬停高亮：指针下方的菜单按钮（非自己）= 插入位
+        // 悬停高亮：指针下方的按钮（非自己）= 插入位
         let target: string | null = null;
         if (!outside(ev.clientX, ev.clientY) && reorderable) {
           const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
           const idx = el?.closest?.("[data-detach-btn]") as HTMLElement | null;
-          if (idx && idx.dataset.detachBtn && idx.dataset.detachBtn !== name) target = idx.dataset.detachBtn;
+          if (idx && idx.dataset.detachBtn && idx.dataset.detachBtn !== identity) {
+            target = idx.dataset.detachBtn;
+          }
         }
         store.getState().setHoverTarget(target);
         setDrag({ x: last.x, y: last.y, detach: outside(last.x, last.y) });
@@ -84,13 +96,17 @@ export function useDetachDrag(opts: {
         const { x, y } = last;
         store.getState().setHoverTarget(null);
         if (outside(x, y)) {
-          const p = clampFloatPos(x - FLOAT_W / 2, y - FLOAT_H / 2);
-          store.getState().open(name, p.x, p.y);
+          if (detach) {
+            detach(x, y);
+          } else {
+            const p = clampFloatPos(x - FLOAT_W / 2, y - FLOAT_H / 2);
+            store.getState().open(identity, p.x, p.y);
+          }
         } else if (reorderable && onInBarDrop) {
           const el = document.elementFromPoint(x, y) as HTMLElement | null;
           const idx = el?.closest?.("[data-detach-btn]") as HTMLElement | null;
           const t = idx?.dataset.detachBtn;
-          if (t && t !== name) onInBarDrop(t);
+          if (t && t !== identity) onInBarDrop(t);
         }
         setDrag(null);
         // dragged 标志留给紧随的 click（拖拽后的 click 要吞）；宏任务清位，避免误吞下一次正常点击
@@ -101,7 +117,7 @@ export function useDetachDrag(opts: {
       window.addEventListener("pointerup", up);
       window.addEventListener("pointercancel", up);
     },
-    [name, barRef, reorderable, onInBarDrop, store],
+    [identity, barRef, reorderable, onInBarDrop, detach, store],
   );
 
   /** 按钮 onClick 首行调用：刚拖拽过 → 返回 true（调用方直接 return，吞掉 click） */
@@ -120,7 +136,7 @@ export function useDetachDrag(opts: {
           style={{ left: drag.x - 40, top: drag.y - 18 }}
         >
           <span className="float-ghost__dot" style={{ background: color || "#2980b9" }} />
-          <span>{name}</span>
+          <span>{display}</span>
           {drag.detach ? <em>松开脱离为子窗口</em> : null}
         </div>,
         document.body,

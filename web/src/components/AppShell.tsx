@@ -11,9 +11,11 @@ import { ToastHost, useToast } from "./toast";
 import { PromptDialogHost } from "./PromptDialog";
 import { useSettingsModal } from "../store/settingsModal";
 import { bindMenuEvents, useMenuStore, isFixedVisible } from "../features/menu/store";
+import { useBrowserStore } from "../features/browser/store";
 import { useWheelScrollHorizontal } from "../hooks/useWheelScroll";
 import { useDetachStore } from "../features/floating/detachStore";
 import { useDetachDrag } from "../features/floating/useDetachDrag";
+import { detachToFloat, closeFloat, bindFloatEvents } from "../features/floating/floatClient";
 import { FloatingWindowHost } from "../features/floating/FloatingWindow";
 import { GlobalShortcuts } from "../features/shortcuts/GlobalShortcuts";
 import { bindShortcutEvents } from "../features/shortcuts/store";
@@ -40,10 +42,18 @@ function FixedNavButton({ to, label, end, barRef, onCtx }: {
   barRef: React.RefObject<HTMLElement | null>;
   onCtx: (e: React.MouseEvent, name: string) => void;
 }) {
-  const { startDrag, suppressClick, ghost } = useDetachDrag({ name: label, reorderable: false, barRef });
+  const { startDrag, suppressClick, ghost } = useDetachDrag({
+    name: label,
+    key: label,
+    label,
+    reorderable: false,
+    barRef,
+    detach: (x, y) => {
+      void detachToFloat({ key: label, label, kind: "menu", menu: label, nav: "首页", x, y });
+    },
+  });
   const hoverMe = useDetachStore((s) => s.hoverTarget === label);
   const detached = useDetachStore((s) => label in s.detached);
-  const close = useDetachStore((s) => s.close);
   return (
     <>
       <NavLink
@@ -61,7 +71,7 @@ function FixedNavButton({ to, label, end, barRef, onCtx }: {
         onPointerDown={startDrag}
         onClick={(e) => {
           if (suppressClick()) { e.preventDefault(); return; }
-          if (detached) { e.preventDefault(); close(label); }
+          if (detached) { e.preventDefault(); closeFloat(label); }
         }}
         onContextMenu={(e) => { e.preventDefault(); onCtx(e, label); }}
       >
@@ -90,6 +100,11 @@ export default function AppShell() {
   // 固定菜单栏显隐（config.json __fixed_menu_visible__，menu.changed 自动刷新）+ 右键菜单
   const fixedVisible = useMenuStore((s) => s.fixedVisible);
   const [fixedCtx, setFixedCtx] = useState<CtxState | null>(null);
+  // 内置浏览器的已打开标签：存在标签时才在顶栏出现「浏览器」入口。
+  // 该入口是普通 NavLink —— 不参与拖出脱离、不写 config.json（纯 UI 状态）。
+  const browserTabs = useBrowserStore((s) => s.tabs);
+  const browserActiveId = useBrowserStore((s) => s.activeId);
+  const browserTab = browserTabs.find((t) => t.id === browserActiveId) ?? browserTabs[0];
 
   // ---- 自定义窗口控件（v2.0.8 起窗口形态为无边框：顶栏驱动 移动/最大化/拉伸/关闭；非窗口形态不渲染）----
   const [windowed, setWindowed] = useState(false);
@@ -320,6 +335,8 @@ export default function AppShell() {
     const sub = subscribeOnStatus();
     // 桥接在线后拉取动态菜单 + 订阅 menu.changed（设置改菜单/工具时顶栏同步）
     bindMenuEvents();
+    // v2.3.2：原生浮动窗口关闭 → 收回主窗口菜单按钮的「已脱离」态
+    const unbindFloat = bindFloatEvents();
     // 快捷键表：首次加载 + 订阅 shortcut.changed（即时生效）
     bindShortcutEvents();
     // 窗口形态探测：无边框窗口（frameless）才渲染 最大化/关闭X/拖移/拉伸 控件（浏览器/服务形态隐藏）
@@ -342,6 +359,7 @@ export default function AppShell() {
     return () => {
       disconnectBridge();
       unsubSettings();
+      unbindFloat();
       sub();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -389,6 +407,21 @@ export default function AppShell() {
               barRef={topBarRef}
               onCtx={(e, name) => setFixedCtx({ x: e.clientX, y: e.clientY, target: { kind: "menu", name } })}
             />
+          ) : null}
+          {/* 内置浏览器入口（有标签时才显示）：指向当前激活标签，便于从任意页面一键切回。
+              固定顺序、不可拖拽、不参与脱离子窗口（普通 NavLink，不经过 FixedNavButton）。 */}
+          {browserTab ? (
+            <NavLink
+              to={`/browser/${encodeURIComponent(browserTab.menu)}/${encodeURIComponent(browserTab.name)}`}
+              className={
+                "nav-link" + (location.pathname.startsWith("/browser") ? " active" : "")
+              }
+              draggable={false}
+              onDragStart={(e) => e.preventDefault()}
+              title="内置浏览器（已打开的链接工具）"
+            >
+              浏览器
+            </NavLink>
           ) : null}
           <DynamicMenuNav barRef={topBarRef} />
           {/* v2.2.1：显式拖动垫片 —— 顶栏中部（菜单按钮右侧 → 右侧窗口控件之间）的空白区
