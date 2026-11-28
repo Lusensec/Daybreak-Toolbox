@@ -7,11 +7,14 @@
 import json
 import os
 import re
+import subprocess
+import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 
 #: 应用当前版本（检查更新时与 GitHub latest Release 对比）
-APP_VERSION = "2.2.3"
+APP_VERSION = "2.2.4"
 
 #: 内置默认 GitHub 仓库（检查更新回退值）。前端「更新设置」不再提供仓库配置 UI，
 #: 未传/未配置仓库时检查此仓库；与 web 端 SettingsModal 的 UPDATE_REPO 常量保持一致。
@@ -129,9 +132,120 @@ def check_update(repo: str) -> dict:
         "published_at": data.get("published_at"),
         "has_update": has_update,
         "repo_url": f"https://github.com/{repo}",
+        # v2.2.4：Release 资产清单（供程序内一键下载安装；仅暴露必要字段）
+        "assets": [
+            {
+                "name": str(a.get("name") or ""),
+                "size": int(a.get("size") or 0),
+                "download_url": str(a.get("browser_download_url") or ""),
+            }
+            for a in (data.get("assets") or [])
+            if isinstance(a, dict) and a.get("browser_download_url")
+        ],
     }
 
+
+# ---------------------------------------------------------------- 程序内下载安装（v2.2.4）
+
+#: 可自动下载的 Release 资产后缀（win 安装包优先；其余平台暂只提供链接，不自动安装）
+_INSTALLER_SUFFIX = "-win-setup.exe"
+
+
+def pick_installer_asset(assets) -> dict | None:
+    """从 check_update 返回的 assets 里挑出可自动安装的 Windows 安装包（纯函数，可单测）。
+
+    只认仓库自身的 `<repo-name>-vX.Y.Z-win-setup.exe`（release.yml 的命名约定），
+    避免误下 zip / 其它平台包 / 山寨名字。"""
+    for a in assets or []:
+        name = str(a.get("name") or "")
+        if name.lower().endswith(_INSTALLER_SUFFIX) and str(a.get("download_url") or "").startswith("https://"):
+            return a
+    return None
+
+
+def installer_dest(asset_name: str) -> str:
+    """安装包下载目标路径（应用根目录下的 updates/，PyInstaller 冻结态 = exe 同级，可写）。"""
+    folder = os.path.join(_frozen_root(), "updates")
+    return os.path.join(folder, os.path.basename(asset_name))
+
+
+def _http_download_file(url: str, dest: str, progress) -> str:
+    """流式 GET → dest；progress(downloaded, total) 回调（阻塞调用，main 里走 to_thread）。
+
+    只接受 https + GitHub 官方下载域名，防止 Release 资产 URL 被篡改后下载任意文件执行。"""
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (
+        host == "github.com" or host.endswith(".githubusercontent.com")
+    ):
+        raise UpdateError("UPDATE_URL_INVALID", "下载链接不是 GitHub 官方地址，已拒绝")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    tmp = dest + ".part"
+    req = urllib.request.Request(url, headers={"User-Agent": "daybreak-toolbox-updater"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            total = int(r.headers.get("Content-Length") or 0)
+            got = 0
+            with open(tmp, "wb") as f:
+                while True:
+                    chunk = r.read(1024 * 128)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    got += len(chunk)
+                    progress(got, total)
+        os.replace(tmp, dest)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise UpdateError("UPDATE_DOWNLOAD_FAILED", f"下载失败：{e}")
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+    return dest
+
+
+def download_installer(asset: dict, progress=None) -> str:
+    """下载安装包到 updates/ 并返回本地路径。progress(downloaded, total) 可选。"""
+    url = str(asset.get("download_url") or "")
+    name = str(asset.get("name") or "")
+    if not name.lower().endswith(_INSTALLER_SUFFIX):
+        raise UpdateError("UPDATE_ASSET_INVALID", "该资产不是 Windows 安装包")
+    return _http_download_file(url, installer_dest(name), progress or (lambda _g, _t: None))
+
+
+def start_install(path: str) -> None:
+    """启动 Inno Setup 安装包（静默 / 关闭占用进程 / 装完不自动重启），随即返回。
+
+    调用方（main）负责在启动后延迟退出自身，避免旧 exe 占用安装目录文件。
+    Inno Setup 静默参数：/VERYSILENT 无界面；/CLOSEAPPLICATIONS 关闭占用文件的进程；
+    /NORESTART 不强制系统重启。"""
+    if not os.path.isfile(path):
+        raise UpdateError("UPDATE_FILE_MISSING", "安装包文件不存在，请重新下载")
+    if not path.lower().endswith(_INSTALLER_SUFFIX):
+        raise UpdateError("UPDATE_ASSET_INVALID", "拒绝执行非安装包文件")
+    try:
+        # DETACHED_PROCESS：父进程退出后安装程序仍继续；CREATE_NEW_PROCESS_GROUP 隔离信号
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        subprocess.Popen([path, "/VERYSILENT", "/CLOSEAPPLICATIONS", "/NORESTART"],
+                         creationflags=flags if os.name == "nt" else 0,
+                         close_fds=True)
+    except OSError as e:
+        raise UpdateError("UPDATE_INSTALL_FAILED", f"启动安装程序失败：{e}")
+
+
 _VERSIONS = {
+    "v2.2.4":
+"""
+界面布局重构 + 程序内更新安装 + 关闭行为单选：
+1、整个界面切分为左右两列：左侧为整列通高的菜单导航栏，右侧为「顶栏 + 导航栏 + 内容区」；
+   顶栏原品牌区（logo / 版本号 / 已连接状态）移除，「破晓·工具箱」文字并入左侧导航栏顶部（取代「我的菜单」）
+2、更新检查支持程序内一键下载安装：检测到新版本后自动筛选 GitHub Release 的 Windows 安装包，
+   下载到应用 updates/ 目录（SSE 实时进度），点「立即安装」启动 Inno 静默安装并自动退出应用完成更新；
+   非 Windows 平台仍提供手动下载链接
+3、通用设置「关闭后进入最小化」改为单选组：关闭时退出程序 / 关闭时最小化到托盘（互斥，即时生效）
+""",
     "v2.2.3":
 """
 侧栏、窗口与双屏体验修正：

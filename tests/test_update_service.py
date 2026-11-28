@@ -129,5 +129,47 @@ class CheckUpdateTest(_IsolatedTestCase):
         self.assertEqual(cm.exception.code, "UPDATE_FETCH_FAILED")
 
 
+class InstallAssetTest(_IsolatedTestCase):
+    """v2.2.4：程序内一键下载安装 —— 资产筛选 / 目标路径 / URL 校验（纯函数单测）。"""
+
+    def test_pick_installer_asset(self):
+        assets = [
+            {"name": "Daybreak-Toolbox-v9.9.9-win-x64.zip", "size": 1,
+             "download_url": "https://github.com/o/r/releases/download/v9.9.9/a.zip"},
+            {"name": "Daybreak-Toolbox-v9.9.9-win-setup.exe", "size": 2,
+             "download_url": "https://github.com/o/r/releases/download/v9.9.9/setup.exe"},
+            {"name": "Daybreak-Toolbox-v9.9.9-mac-arm64.zip", "size": 3,
+             "download_url": "https://github.com/o/r/releases/download/v9.9.9/m.zip"},
+        ]
+        picked = us.pick_installer_asset(assets)
+        self.assertIsNotNone(picked)
+        self.assertEqual(picked["name"], "Daybreak-Toolbox-v9.9.9-win-setup.exe")
+
+    def test_pick_installer_asset_rejects_bad_url(self):
+        assets = [{"name": "x-win-setup.exe", "download_url": "http://evil.com/x.exe"}]
+        self.assertIsNone(us.pick_installer_asset(assets))
+
+    def test_pick_installer_asset_none(self):
+        self.assertIsNone(us.pick_installer_asset([]))
+        self.assertIsNone(us.pick_installer_asset(None))
+
+    def test_installer_dest_uses_updates_dir(self):
+        dest = us.installer_dest("../../evil-win-setup.exe")
+        self.assertTrue(dest.replace("\\", "/").endswith("/updates/evil-win-setup.exe"))
+
+    def test_download_rejects_non_github_url(self):
+        with self.assertRaises(us.UpdateError) as cm:
+            us._http_download_file("http://evil.com/x.exe", os.path.join(self._tmp.name, "x.exe"), lambda *_: None)
+        self.assertEqual(cm.exception.code, "UPDATE_URL_INVALID")
+        with self.assertRaises(us.UpdateError) as cm:
+            us._http_download_file("https://evil.com/x.exe", os.path.join(self._tmp.name, "x.exe"), lambda *_: None)
+        self.assertEqual(cm.exception.code, "UPDATE_URL_INVALID")
+
+    def test_download_rejects_non_installer(self):
+        with self.assertRaises(us.UpdateError) as cm:
+            us.download_installer({"name": "foo.zip", "download_url": "https://github.com/a/b/x.zip"})
+        self.assertEqual(cm.exception.code, "UPDATE_ASSET_INVALID")
+
+
 if __name__ == "__main__":
     unittest.main()

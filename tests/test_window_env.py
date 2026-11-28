@@ -31,7 +31,7 @@ def test_app_env_includes_version():
     from bridge.update_service import APP_VERSION
     env = bmain.get_app_env()
     assert env["version"] == APP_VERSION
-    assert APP_VERSION == "2.2.3"  # 锚定单一来源常量值（随当前发行版本更新）
+    assert APP_VERSION == "2.2.4"  # 锚定单一来源常量值（随当前发行版本更新）
 
 
 def test_window_rect_no_window_returns_none():

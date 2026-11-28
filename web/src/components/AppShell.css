@@ -19,55 +19,8 @@
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-.menu-brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  line-height: 1.1;
-  flex: 0 0 auto;          /* 固定宽度，不被右侧菜单挤压 */
-  white-space: nowrap;     /* 品牌文案不换行 */
-  min-width: 0;
-}
-.menu-brand__logo {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  flex: 0 0 auto;
-  object-fit: cover;
-  -webkit-user-drag: none;   /* v2.0.20：禁止原生图片拖拽（否则拖 logo 会吞掉 mouseup） */
-  user-select: none;
-}
-.menu-title { font-size: 14px; font-weight: bold; color: var(--text); }
-/* 品牌区文字列（v2.0.18）：标题与「版本号 + 连接状态」上下堆叠 */
-.menu-brand__text { display: flex; flex-direction: column; gap: 3px; }
-/* 第二行：版本号胶囊 + 连接状态（v2.0.20，由底部状态栏迁移而来） */
-.menu-brand__meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
-/* 版本号：椭圆形（胶囊）单色底 + 同色系文字，避免纯文字贴边发灰 */
-.menu-brand__version {
-  flex: 0 0 auto;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--accent-lo);
-  color: var(--accent);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  line-height: 1.5;
-}
-/* 连接状态：在线绿 / 离线红 / 其余中性色；小字 + 图标，紧邻版本号右侧 */
-.menu-brand__conn {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  flex: 0 0 auto;
-  min-width: 52px;   /* 状态文案「连接中/已连接」长度不同，锁最小宽避免顶栏菜单左右抖动 */
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.menu-brand__conn[data-state="online"] { color: var(--success); }
-.menu-brand__conn[data-state="offline"] { color: var(--error); }
+/* v2.2.4：原顶栏品牌区（.menu-brand —— logo / 破晓·工具箱 / 版本号 / 已连接状态）
+   整块移除；品牌文字并入左侧导航栏顶部（.side-nav__brand），顶栏并入右列。 */
 
 .menu-nav {
   display: flex;

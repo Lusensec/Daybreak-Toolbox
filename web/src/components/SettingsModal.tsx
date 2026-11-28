@@ -261,15 +261,43 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   // ---- 更新设置状态（检查更新结果；仓库不再可配置——固定检查 UPDATE_REPO，
   //      与 bridge/update_service.DEFAULT_REPO 同值，后端回退链兜底）----
   const [upChecking, setUpChecking] = useState(false);
-  type UpResult = { kind: "idle" } | { kind: "ok"; msg: string } | { kind: "update"; msg: string; url: string } | { kind: "err"; msg: string };
+  type UpAsset = { name: string; size: number; download_url: string };
+  type UpResult =
+    | { kind: "idle" }
+    | { kind: "ok"; msg: string }
+    | { kind: "update"; msg: string; url: string; asset: UpAsset | null; platform: string }
+    | { kind: "err"; msg: string };
   const [upResult, setUpResult] = useState<UpResult>({ kind: "idle" });
+  // v2.2.4：程序内下载安装（进度经 SSE update.progress 推送；下载完成后启动静默安装）
+  const [upDownloading, setUpDownloading] = useState(false);
+  const [upPercent, setUpPercent] = useState(0);
+  const [upPath, setUpPath] = useState("");
+  const [upInstalling, setUpInstalling] = useState(false);
 
   async function checkUpdate() {
     setUpChecking(true);
+    setUpPath("");
+    setUpDownloading(false);
+    setUpPercent(0);
     try {
       const r = await sendCommand("update.check", {});
       if (r.has_update) {
-        setUpResult({ kind: "update", msg: `发现新版本 ${String(r.latest_version)}（当前 ${String(r.local_version)}）`, url: String(r.release_url ?? "") });
+        // 取可自动安装的 Windows 资产（后端按命名约定筛选；非 win 平台仅给链接）
+        let asset: UpAsset | null = null;
+        let platform = "";
+        try {
+          const [pick, env] = await Promise.all([
+            sendCommand("update.pick_asset", {}) as Promise<{ asset?: UpAsset | null }>,
+            sendCommand("app.env", {}) as Promise<{ platform?: string }>,
+          ]);
+          asset = pick.asset ?? null;
+          platform = String(env.platform ?? "");
+        } catch { /* 取资产失败则退化为「查看更新内容」链接 */ }
+        setUpResult({
+          kind: "update",
+          msg: `发现新版本 ${String(r.latest_version)}（当前 ${String(r.local_version)}）`,
+          url: String(r.release_url ?? ""), asset, platform,
+        });
       } else {
         setUpResult({ kind: "ok", msg: `已是最新版本 ${String(r.local_version)}${r.latest_version ? `（GitHub 最新 ${String(r.latest_version)}）` : ""}` });
       }
@@ -279,6 +307,53 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       setUpChecking(false);
     }
   }
+
+  /** 一键下载：update.download 内部走阻塞下载 + SSE 进度；完成后更新路径，展示「立即安装」。 */
+  async function startDownload() {
+    if (upResult.kind !== "update" || !upResult.asset) return;
+    setUpDownloading(true);
+    setUpPercent(0);
+    try {
+      // 后端下载走后台线程 + SSE 进度，本命令立即返回（不受默认 15s 超时限制）
+      await sendCommand("update.download", { asset: upResult.asset });
+    } catch (e) {
+      setUpDownloading(false);
+      toast.err(`下载失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** 立即安装：启动 Inno 静默安装后应用自动退出（让安装程序接管旧文件）。 */
+  async function startInstall() {
+    if (!upPath) return;
+    setUpInstalling(true);
+    try {
+      const r = await sendCommand("update.install", { path: upPath }) as { message?: string };
+      toast.ok(r.message ?? "安装程序已启动，应用即将退出以完成更新");
+    } catch (e) {
+      setUpInstalling(false);
+      toast.err(`安装失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // 订阅下载进度（模态打开期间）
+  useEffect(() => {
+    if (!open) return;
+    const un = subscribeEvent("update.progress", (raw) => {
+      const p = raw as { phase?: string; percent?: number; path?: string; message?: string };
+      if (p.phase === "downloading") {
+        setUpPercent(Math.max(0, Math.min(100, p.percent ?? 0)));
+      } else if (p.phase === "downloaded") {
+        setUpDownloading(false);
+        setUpPercent(100);
+        setUpPath(String(p.path ?? ""));
+        toast.ok("安装包已下载完成，点「立即安装」完成更新");
+      } else if (p.phase === "error") {
+        setUpDownloading(false);
+        toast.err(p.message ?? "下载失败");
+      }
+    });
+    return un;
+  }, [open]);
 
   const refreshMenus = useCallback(async () => {
     try {
@@ -357,6 +432,17 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     } finally {
       setBusy(false);
     }
+  }
+
+  /** v2.2.4：关闭行为单选切换（close_to_tray 存桥接侧 config/settings.json，即时生效） */
+  async function setCloseBehavior(next: boolean) {
+    if (closeToTray === next) return;
+    await run(async () => {
+      await sendCommand("settings.set", { close_to_tray: next });
+      setCloseToTray(next);
+    }, next
+      ? "已设为：关闭窗口时最小化到托盘（托盘菜单可唤回）"
+      : "已设为：关闭窗口时退出程序");
   }
 
   const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ size?: number | string }> }[] = [
@@ -442,27 +528,30 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
               <div className="menu-vis-group">
                 <div className="menu-vis-group__title">窗口</div>
-                <div className="form-row">
-                  <button
-                    type="button"
-                    className={"form-btn" + (closeToTray ? " primary" : "")}
-                    title={closeToTray ? "已开启：关闭按钮/Alt+F4 最小化到托盘" : "开启后关闭按钮/Alt+F4 最小化到托盘"}
-                    disabled={busy || closeToTray === null}
-                    onClick={() => {
-                      const next = !(closeToTray === true);
-                      void run(async () => {
-                        await sendCommand("settings.set", { close_to_tray: next });
-                        setCloseToTray(next);
-                      }, next
-                        ? "已开启：关闭按钮/Alt+F4 将最小化到托盘（托盘菜单可唤回）"
-                        : "已关闭：关闭按钮/Alt+F4 恢复为退出程序");
-                    }}                  >
-                    <Minimize2 size={13} /> {closeToTray === null ? "加载中…" : "关闭后进入最小化"}
-                  </button>
-                  <span className="settings-sub__hint">
-                    开启后点顶栏「关闭（×）」或 Alt+F4 时最小化到托盘而非退出程序；托盘菜单「打开…」可重新唤回，托盘「退出破晓工具箱」为真正的退出
-                  </span>
+                {/* v2.2.4：关闭行为改为单选组 —— 退出程序 / 最小化到托盘（互斥，即时生效） */}
+                <div className="radio-group" role="radiogroup" aria-label="关闭窗口时的行为">
+                  <label className={"radio-opt" + (closeToTray === false ? " is-active" : "")}>
+                    <input
+                      type="radio" name="close-behavior"
+                      checked={closeToTray === false}
+                      disabled={busy || closeToTray === null}
+                      onChange={() => void setCloseBehavior(false)}
+                    />
+                    <X size={13} /> <span>关闭时退出程序</span>
+                  </label>
+                  <label className={"radio-opt" + (closeToTray === true ? " is-active" : "")}>
+                    <input
+                      type="radio" name="close-behavior"
+                      checked={closeToTray === true}
+                      disabled={busy || closeToTray === null}
+                      onChange={() => void setCloseBehavior(true)}
+                    />
+                    <Minimize2 size={13} /> <span>关闭时最小化到托盘</span>
+                  </label>
                 </div>
+                <span className="settings-sub__hint">
+                  选择「最小化到托盘」后，点顶栏「关闭（×）」或 Alt+F4 时窗口最小化并驻留托盘（托盘菜单「打开…」可重新唤回）；「退出破晓工具箱」为真正的退出。切换即时生效。
+                </span>
               </div>
             </div>
           ) : null}
@@ -861,6 +950,55 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     </>
                   ) : (
                     <span>{upResult.msg}</span>
+                  )}
+                </div>
+              ) : null}
+
+              {/* v2.2.4：程序内一键下载安装。仅 Windows 且 Release 含 win-setup.exe 时可用；
+                  其它平台提示前往 GitHub 手动下载。 */}
+              {upResult.kind === "update" ? (
+                <div className="up-install">
+                  {upResult.platform.includes("win") && upResult.asset ? (
+                    <>
+                      <div className="form-row">
+                        {!upPath ? (
+                          <button
+                            className="form-btn primary"
+                            disabled={upDownloading}
+                            title="从 GitHub 下载安装包到应用 updates/ 目录"
+                            onClick={() => void startDownload()}
+                          >
+                            {upDownloading ? <RefreshCw size={13} className="spin" /> : <Download size={13} />}
+                            {upDownloading ? `下载中 ${upPercent}%` : "下载并安装"}
+                          </button>
+                        ) : (
+                          <button
+                            className="form-btn primary"
+                            disabled={upInstalling}
+                            title="启动静默安装，应用将自动退出以完成更新"
+                            onClick={() => void startInstall()}
+                          >
+                            {upInstalling ? <RefreshCw size={13} className="spin" /> : <Download size={13} />}
+                            {upInstalling ? "正在安装…" : "立即安装"}
+                          </button>
+                        )}
+                        <span className="settings-sub__hint">
+                          {upPath ? `已下载：${upResult.asset.name}` : `安装包：${upResult.asset.name}（${(upResult.asset.size / 1048576).toFixed(1)} MB）`}
+                        </span>
+                      </div>
+                      {upDownloading ? (
+                        <div className="up-progress">
+                          <div className="up-progress__bar" style={{ width: `${upPercent}%` }} />
+                        </div>
+                      ) : null}
+                      <p className="up-install__note">
+                        点「立即安装」后将启动静默安装并自动退出应用；安装完成重新打开即为新版本。若安装失败可到上方「查看更新内容」手动下载。
+                      </p>
+                    </>
+                  ) : (
+                    <p className="up-install__note">
+                      当前平台暂不支持程序内自动安装，请点上方「查看更新内容」前往 GitHub 手动下载。
+                    </p>
                   )}
                 </div>
               ) : null}

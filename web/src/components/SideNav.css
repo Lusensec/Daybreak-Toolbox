@@ -29,12 +29,18 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--muted);
   white-space: nowrap;
   flex: 1 1 auto;
   min-width: 0;
+}
+/* v2.2.4：原顶栏品牌区（logo + 版本 + 已连接）移除，品牌文字并入侧栏顶部 */
+.side-nav__brand {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .side-nav__head-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .side-nav[data-collapsed="1"] .side-nav__head { justify-content: center; padding: 8px 4px 6px; }

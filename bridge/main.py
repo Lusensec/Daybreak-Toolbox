@@ -37,6 +37,9 @@ from .update_service import (
     APP_VERSION,
     UpdateError,
     check_update,
+    pick_installer_asset,
+    download_installer,
+    start_install,
     get_repo,
     get_update_record_content,
     save_repo,
@@ -254,9 +257,60 @@ def _register_builtin_commands() -> None:
         except UpdateError as e:
             raise BridgeError(e.code, e.message)
 
+    # ---- v2.2.4：程序内一键下载安装（GitHub Release win-setup.exe → updates/ → 静默安装）----
+    # 下载走后台线程 + SSE 进度：update.download 立即返回 started，
+    # 前端不阻塞在 fetch 上（16MB 包在慢网络 >> 默认 15s 超时），靠 update.progress 事件驱动 UI。
+    async def _update_download(p, _ws):
+        asset = p.get("asset")
+        if not isinstance(asset, dict):
+            raise BridgeError("UPDATE_ASSET_INVALID", "缺少安装包资产信息，请先检查更新")
+
+        def prog(got: int, total: int) -> None:
+            asyncio.run_coroutine_threadsafe(
+                _bus.broadcast("update.progress", {
+                    "phase": "downloading",
+                    "downloaded": got, "total": total,
+                    "percent": int(got * 100 / total) if total else 0,
+                }), _bus._loop)
+
+        def task() -> None:
+            try:
+                path = download_installer(asset, prog)
+                asyncio.run_coroutine_threadsafe(
+                    _bus.broadcast("update.progress", {"phase": "downloaded", "path": path, "percent": 100}),
+                    _bus._loop)
+            except UpdateError as e:
+                asyncio.run_coroutine_threadsafe(
+                    _bus.broadcast("update.progress", {"phase": "error", "message": e.message}),
+                    _bus._loop)
+
+        threading.Thread(target=task, name="update-download", daemon=True).start()
+        return {"ok": True, "started": True}
+
+    async def _update_pick_asset(p, _ws):
+        try:
+            r = await asyncio.to_thread(check_update, (p.get("repo") or ""))
+            return {"ok": True, "asset": pick_installer_asset(r.get("assets") or []),
+                    "latest_version": r.get("latest_version")}
+        except UpdateError as e:
+            raise BridgeError(e.code, e.message)
+
+    async def _update_install(p, _ws):
+        try:
+            path = str(p.get("path") or "")
+            await asyncio.to_thread(start_install, path)
+            # 启动安装程序后延迟退出自身（让 HTTP 响应先发出去，避免旧 exe 占用安装目录）
+            threading.Timer(1.0, lambda: os._exit(0)).start()
+            return {"ok": True, "message": "安装程序已启动，应用即将退出以完成更新"}
+        except UpdateError as e:
+            raise BridgeError(e.code, e.message)
+
     _bus.register("update.repo.get", _update_repo_get)
     _bus.register("update.repo.save", _update_repo_save)
     _bus.register("update.check", _update_check)
+    _bus.register("update.pick_asset", _update_pick_asset)
+    _bus.register("update.download", _update_download)
+    _bus.register("update.install", _update_install)
 
     # ---- 快捷键设置（config/shortcuts.json 槽位表；整表覆盖保存 + 广播即时生效）----
     async def _shortcut_get(p, _ws):

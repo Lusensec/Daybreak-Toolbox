@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation } from "react-router";
-import { Wifi, WifiOff, Maximize, Copy, Minus, X } from "lucide-react";
+import { Maximize, Copy, Minus, X } from "lucide-react";
 import { useTheme } from "../theme/ThemeProvider";
 import { connectBridge, disconnectBridge, useConnStore, sendCommand, fetchBridgeToken, subscribeEvent } from "../services/ws";
 import { DynamicMenuNav, NavBarRow, CtxMenu } from "./DynamicMenuNav";
@@ -76,6 +76,7 @@ function FixedNavButton({ to, label, end, barRef, onCtx }: {
 export default function AppShell() {
   const { isDark } = useTheme();
   const conn = useConnStore((s) => s.status);
+  const online = conn === "online";
   const lastError = useConnStore((s) => s.lastError);
   const [token, setToken] = useState(() => localStorage.getItem("daybreak.token") ?? "");
   const [connected, setConnected] = useState(false);
@@ -95,8 +96,6 @@ export default function AppShell() {
   const [maximized, setMaximized] = useState(false);
   // v2.0.15「关闭后进入最小化」状态（settings.get；仅影响 X 按钮提示文案——行为由桥接侧统一判定）
   const [closeToTray, setCloseToTray] = useState<boolean | null>(null);
-  // v2.0.18：品牌区版本号（app.env → version；服务形态/旧桥接无该字段时不渲染）
-  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   /** 顶栏非交互目标判定：按钮/链接/输入控件/可脱离项/图片 不参与拖移。
    *  v2.0.20：显式排除 img —— <img> 默认可原生拖拽（draggable IDL=true 但无属性，
@@ -328,7 +327,7 @@ export default function AppShell() {
       .then((r) => {
         const env = r as { windowed?: boolean; version?: string; maximized?: boolean };
         if (env.windowed) { setWindowed(true); }
-        if (typeof env.version === "string" && env.version) { setAppVersion(env.version); }
+        // v2.2.4：品牌区已移除，version 不再在顶栏渲染（app.env 仍返回供其它用途）
         // v2.2.3：页面重载后仍与真实窗口状态一致（几何驱动，不依赖内存 flag）
         if (typeof env.maximized === "boolean") { setMaximized(env.maximized); }
       })
@@ -369,34 +368,17 @@ export default function AppShell() {
     }
   }
 
-  const online = conn === "online";
-
   return (
     <div className="app-shell">
-      <header className="menu-bar" ref={topBarRef} onMouseDown={onHeaderDragStart} onDoubleClick={onHeaderDblClick}>
-        <div className="menu-brand">
-          <img
-            className="menu-brand__logo"
-            src={isDark ? "/logo.png" : "/logo-light.png"}
-            alt="破晓·工具箱"
-            draggable={false}
-          />
-          <div className="menu-brand__text">
-            <span className="menu-title">破晓·工具箱</span>
-            {/* v2.0.20：版本号（椭圆底色胶囊）+ 紧邻右侧的桥接连接状态；
-                原底部状态栏（就绪 · 破晓·工具箱 / 已连接）已移除，状态收敛到此处 */}
-            <div className="menu-brand__meta">
-              {appVersion ? <span className="menu-brand__version">v{appVersion}</span> : null}
-              <span className="menu-brand__conn" data-state={online ? "online" : "offline"} title={lastError ?? ""}>
-                {online ? <Wifi size={11} /> : <WifiOff size={11} />}
-                <span>
-                  {conn === "online" ? "已连接" : conn === "reconnecting" ? "重连中" : conn === "connecting" ? "连接中" : "未连接"}
-                </span>
-              </span>
-            </div>
-          </div>
-        </div>
-        <nav className="menu-nav" ref={menuNavRef}>
+      {/* v2.2.4：整个界面切分为「左侧导航栏 | 右列」。
+          顶栏（首页 + 已上架菜单 + 窗口控件）与导航行一并下沉到右列顶部；
+          原横跨整窗的品牌区（logo / 版本号 / 已连接状态）已移除，品牌文字并入左侧导航栏顶部。 */}
+      <div className="app-body">
+        <SideNav />
+
+        <div className="content-col">
+          <header className="menu-bar" ref={topBarRef} onMouseDown={onHeaderDragStart} onDoubleClick={onHeaderDblClick}>
+            <nav className="menu-nav" ref={menuNavRef}>
           {/* 顺序：首页 → 动态加载的用户菜单（均按 菜单栏展示 参数 1/0 显隐；可拖出顶栏脱离为子窗口）。
               v2.1.3：AI 对话 / 终端管理 / 编解码 / 汉英翻译 / 临时笔记 已移除，固定菜单只剩首页 */}
           {isFixedVisible(fixedVisible, "首页") ? (
@@ -427,8 +409,8 @@ export default function AppShell() {
               onClose={() => setFixedCtx(null)}
             />
           ) : null}
-        </nav>
-        <div className="menu-bar-right">
+            </nav>
+            <div className="menu-bar-right">
           {/* v2.2.1：右上角「工具箱设置」按钮已移除 —— 左下角侧栏已有「管理菜单」入口，
               顶栏只保留原生窗口控件（最小化/最大化/关闭）。 */}
           {/* 自定义窗口控件（仅无边框窗口形态：原生标题栏已移除，窗口操作在此；顺序=原生 最小化/最大化/关闭）
@@ -449,20 +431,11 @@ export default function AppShell() {
                 <X size={16} />
               </button>
             </>
-          ) : null}
-        </div>
-      </header>
+            ) : null}
+            </div>
+          </header>
 
-      {/* v2.2.0 布局：左侧导航栏（全部用户菜单在此，文件夹式可展开）+ 右侧内容区。
-          顶栏默认只剩固定菜单「首页」，左侧点菜单/导航 → 该菜单上架到顶栏并展开导航行。
-
-          v2.2.2 布局调整：顶栏展开后的「导航栏行」原本横跨整窗（位于侧栏上方），
-          现在下沉到**右侧内容列**内、面包屑之上 —— 侧栏恢复整列通高，导航行不再压在侧栏上方。 */}
-      <div className="app-body">
-        <SideNav />
-
-        <div className="content-col">
-          {/* 导航栏行：菜单栏正下方常驻第二行（v2.2.2 起位于内容列顶部，仅覆盖内容区宽度） */}
+          {/* 导航栏行：顶栏正下方第二行（v2.2.2 起位于内容列顶部，仅覆盖内容区宽度） */}
           <NavBarRow />
 
           <main className="content">

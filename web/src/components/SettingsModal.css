@@ -661,3 +661,64 @@
   background: var(--panel);
 }
 .update-star:hover { background: color-mix(in srgb, var(--warn, #f5a623) 12%, var(--panel)); }
+
+/* ================= v2.2.4：关闭行为单选组 + 更新下载安装 ================= */
+.radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.radio-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.radio-opt:hover { border-color: var(--accent); }
+.radio-opt.is-active {
+  border-color: var(--accent);
+  background: var(--accent-lo);
+  color: var(--accent);
+  font-weight: 600;
+}
+.radio-opt input[type="radio"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.radio-opt:has(input:disabled) { opacity: 0.55; cursor: not-allowed; }
+
+/* 程序内一键下载安装 */
+.up-install {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--heading-bg);
+}
+.up-install__note { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.up-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.up-progress__bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}

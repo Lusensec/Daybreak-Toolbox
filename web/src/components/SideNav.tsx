@@ -133,8 +133,8 @@ export function SideNav() {
     >
       <div className="side-nav__head">
         {collapsed ? null : (
-          <span className="side-nav__title">
-            <Folder size={13} /> 我的菜单
+          <span className="side-nav__title" title="破晓·工具箱">
+            <span className="side-nav__brand">破晓·工具箱</span>
           </span>
         )}
         <div className="side-nav__head-actions">
